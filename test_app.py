@@ -300,6 +300,31 @@ def test_discover_models_api_always_includes_local(monkeypatch):
     assert out["chat"] == ["gpt-4o", "text-embedding-3-small"]
 
 
+def test_local_embeddings_never_call_api(monkeypatch):
+    # Regression: embedding_provider="local" must use fastembed, never the API,
+    # even when an api_base_url is configured (for chat).
+    def boom(texts, settings):
+        raise AssertionError("API must not be called for local embeddings")
+
+    class FakeModel:
+        def embed(self, texts):
+            return [np.ones(3, dtype="float32") for _ in texts]
+
+    monkeypatch.setattr(library, "_api_embed", boom)
+    monkeypatch.setattr(library, "_get_local_model", lambda name: FakeModel())
+    out = library._default_embed(
+        ["hi"], {"embedding_provider": "local", "embedding_model": "x",
+                 "api_base_url": "http://192.168.0.4:8080/v1"})
+    assert out.shape == (1, 3)
+
+
+def test_api_provider_uses_api(monkeypatch):
+    monkeypatch.setattr(library, "_api_embed",
+                        lambda texts, s: np.ones((len(texts), 2), dtype="float32"))
+    out = library._default_embed(["a", "b"], {"embedding_provider": "api"})
+    assert out.shape == (2, 2)
+
+
 def test_default_model_ids_parses_and_sorts(monkeypatch):
     import requests
 

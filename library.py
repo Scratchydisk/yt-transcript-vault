@@ -89,7 +89,7 @@ LOCAL_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
 
 DEFAULT_SETTINGS = {
-    "embedding_provider": "local",              # "local" | "openai" | "ollama"
+    "embedding_provider": "local",              # "local" (fastembed) | "api" (OpenAI-compatible)
     "embedding_model": LOCAL_EMBED_MODEL,
     "api_base_url": "",                         # OpenAI-compatible base, e.g. https://api.openai.com/v1
     "api_key": "",
@@ -221,16 +221,17 @@ def _default_model_ids(settings: dict) -> list[str]:
 
 
 def discover_models(settings: dict) -> dict:
-    """Discover selectable models for the current provider.
+    """Discover selectable models from the configured API connection.
 
     Returns {"embedding": [...], "chat": [...]}. The local fastembed model is
-    always offered for embeddings. For openai/ollama, the provider's /models
-    list is added (and used for chat). Raises nothing — API errors yield the
-    local-only fallback so the UI can still show something.
+    ALWAYS offered for embeddings, independent of the API. If an api_base_url
+    is set, its /models list is added (used for chat, and available for API
+    embeddings). Discovery keys off the API connection, NOT the embedding
+    source, so local-embeddings + API-chat discovers chat models fine.
     """
     embedding = [LOCAL_EMBED_MODEL]
     chat: list[str] = []
-    if settings.get("embedding_provider", "local") != "local" or settings.get("api_base_url"):
+    if settings.get("api_base_url"):
         fn = _MODELS_FN or _default_model_ids
         ids = fn(settings)
         chat = list(ids)

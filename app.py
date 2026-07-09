@@ -151,15 +151,15 @@ def save_settings_ui(provider, model, base, key, chat_model):
     return "Saved."
 
 
-def on_provider_change(provider: str, base: str):
-    # Prefill the Ollama default base URL when switching to Ollama with none set.
-    if provider == "ollama" and not base.strip():
+def on_api_type_change(api_type: str, base: str):
+    # The API-type radio only prefills the base URL; it doesn't affect embeddings.
+    if api_type == "ollama" and not base.strip():
         return library.OLLAMA_BASE_URL
     return base
 
 
-def discover_models_ui(provider, base, key):
-    settings = {"embedding_provider": provider, "api_base_url": base, "api_key": key}
+def discover_models_ui(base, key):
+    settings = {"api_base_url": base, "api_key": key}
     try:
         found = library.discover_models(settings)
     except Exception as exc:  # noqa: BLE001 — surface discovery failure in the UI
@@ -212,20 +212,27 @@ with gr.Blocks(title="Transcript Library") as demo:
                 chat_out = gr.Markdown("")
             with gr.Tab("Settings"):
                 s = library.load_settings()
-                # Map the legacy "api" value onto the new "openai" option.
-                _prov = "openai" if s["embedding_provider"] == "api" else s["embedding_provider"]
+                # Embedding source is independent of the chat API: "local" uses
+                # fastembed; anything else (legacy openai/ollama/api) means "api".
+                _emb_source = "local" if s["embedding_provider"] == "local" else "api"
+                gr.Markdown("### Embeddings")
                 prov = gr.Radio(
-                    [("Local (fastembed)", "local"), ("OpenAI API", "openai"), ("Ollama", "ollama")],
-                    value=_prov, label="Embedding provider")
+                    [("Local — fastembed, no API", "local"), ("Use the API below", "api")],
+                    value=_emb_source, label="Embedding source")
+                emodel = gr.Dropdown(
+                    choices=sorted({library.LOCAL_EMBED_MODEL, s["embedding_model"]}),
+                    value=s["embedding_model"], label="Embedding model",
+                    allow_custom_value=True)
+                gr.Markdown("### Chat &amp; API connection\n"
+                            "Used for chat. Also used for embeddings only if "
+                            "\"Use the API\" is selected above.")
+                api_type = gr.Radio([("OpenAI", "openai"), ("Ollama", "ollama")],
+                                     value="openai", label="API type (prefills base URL)")
                 base = gr.Textbox(s["api_base_url"], label="API base URL",
                                   placeholder="https://api.openai.com/v1")
                 key = gr.Textbox(s["api_key"], label="API key", type="password")
                 discover_btn = gr.Button("Discover models")
                 discover_msg = gr.Markdown("")
-                emodel = gr.Dropdown(
-                    choices=sorted({library.LOCAL_EMBED_MODEL, s["embedding_model"]}),
-                    value=s["embedding_model"], label="Embedding model",
-                    allow_custom_value=True)
                 cmodel = gr.Dropdown(
                     choices=[s["chat_model"]] if s["chat_model"] else [],
                     value=s["chat_model"] or None, label="Chat model",
@@ -244,8 +251,8 @@ with gr.Blocks(title="Transcript Library") as demo:
     table.select(on_row_select, [visible_state, search_in],
                  [player_html, meta_md, md_view, current_json])
     chat_btn.click(do_chat, [chat_in, chat_scope, current_json], [chat_out])
-    prov.change(on_provider_change, [prov, base], [base])
-    discover_btn.click(discover_models_ui, [prov, base, key], [emodel, cmodel, discover_msg])
+    api_type.change(on_api_type_change, [api_type, base], [base])
+    discover_btn.click(discover_models_ui, [base, key], [emodel, cmodel, discover_msg])
     save_btn.click(save_settings_ui, [prov, emodel, base, key, cmodel], [save_msg])
 
 if __name__ == "__main__":
