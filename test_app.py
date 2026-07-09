@@ -118,3 +118,23 @@ def test_scan_library_sort_order(tmp_path):
 
     assert rows[2]["title"] == "Zebra Video"
     assert rows[2]["published"] == "2026-01-15"
+
+
+# Task 3: Settings load/save
+import stat
+
+
+def test_settings_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setattr(library, "config_dir", lambda: tmp_path)
+    s = library.load_settings()
+    assert s["embedding_provider"] == "local"       # default
+    s["api_key"] = "secret"
+    library.save_settings(s)
+    assert library.load_settings()["api_key"] == "secret"
+
+
+def test_settings_file_permissions(tmp_path, monkeypatch):
+    monkeypatch.setattr(library, "config_dir", lambda: tmp_path)
+    library.save_settings(library.DEFAULT_SETTINGS.copy())
+    mode = stat.S_IMODE((tmp_path / "config.json").stat().st_mode)
+    assert mode == 0o600

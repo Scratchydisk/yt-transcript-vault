@@ -5,8 +5,11 @@ No Gradio import here — this module stays UI-agnostic and unit-testable.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
+
+from transcribe import config_dir
 
 
 def format_timestamp(seconds: float) -> str:
@@ -74,3 +77,37 @@ def keyword_search(root: Path, query: str, per_video_cap: int = 20,
             truncated = True
             break
     return hits, truncated
+
+
+DEFAULT_SETTINGS = {
+    "embedding_provider": "local",              # "local" | "api"
+    "embedding_model": "BAAI/bge-small-en-v1.5",
+    "api_base_url": "",                         # OpenAI-compatible base, e.g. http://localhost:11434/v1
+    "api_key": "",
+    "chat_model": "",
+}
+
+
+def settings_path() -> Path:
+    return config_dir() / "config.json"
+
+
+def load_settings() -> dict:
+    merged = DEFAULT_SETTINGS.copy()
+    p = settings_path()
+    if p.exists():
+        try:
+            merged.update(json.loads(p.read_text(encoding="utf-8")))
+        except (ValueError, OSError):
+            pass
+    return merged
+
+
+def save_settings(settings: dict) -> None:
+    p = settings_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    try:
+        os.chmod(p, 0o600)
+    except OSError:
+        pass  # ponytail: best-effort on filesystems without POSIX perms (Windows)
