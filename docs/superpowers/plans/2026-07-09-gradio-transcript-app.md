@@ -978,9 +978,11 @@ with gr.Blocks(title="Transcript Library") as demo:
                 save_btn = gr.Button("Save settings")
                 save_msg = gr.Markdown("")
 
-    # js=SEEK_JS defines window.ytSeek on the client at load (executes; a
-    # <script> in gr.HTML would not).
-    demo.load(load_library, outputs=[visible_state, table, stats_md], js=SEEK_JS)
+    # Two separate load handlers: one pure-JS to define window.ytSeek on the
+    # client (executes; a <script> in gr.HTML would not), one for the data.
+    # Kept separate so the no-return js can't clobber the data fn's outputs.
+    demo.load(None, None, None, js=SEEK_JS)
+    demo.load(load_library, outputs=[visible_state, table, stats_md])
     fetch_btn.click(do_fetch, [url_in], [fetch_msg, table, stats_md])
     search_in.submit(do_search, [search_in, mode], [table, search_note, visible_state])
     mode.change(do_search, [search_in, mode], [table, search_note, visible_state])
@@ -1075,6 +1077,9 @@ transcripts/
 __pycache__/
 *.pyc
 ```
+
+If `transcripts/` is already tracked from an earlier commit, stop tracking it
+(files stay on disk): `git rm -r --cached transcripts/` before committing.
 
 - [ ] **Step 5: Update `CLAUDE.md`**
 
