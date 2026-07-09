@@ -43,7 +43,8 @@ def scan_library(root: Path) -> list[dict]:
             "md_path": str(jp.with_suffix(".md")),
             "snippet_count": len(data.get("snippets", [])),
         })
-    rows.sort(key=lambda r: (r["published"], r["title"]), reverse=True)
+    rows.sort(key=lambda r: r["title"])
+    rows.sort(key=lambda r: r["published"], reverse=True)
     return rows
 
 

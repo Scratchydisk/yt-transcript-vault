@@ -89,3 +89,32 @@ def test_keyword_search_no_match(tmp_path):
     hits, truncated = library.keyword_search(tmp_path, "zzz")
     assert hits == []
     assert truncated is False
+
+
+def test_scan_library_sort_order(tmp_path):
+    """Verify sort order: published descending, title ascending within same date."""
+    snippets = [{"text": "test", "start": 0.0, "duration": 1.0}]
+
+    # Create videos with the same published date but titles in reverse order
+    # (Zebra before Apple alphabetically) to verify they get sorted ascending
+    _write_video(tmp_path, "Chan A", "Zebra Video", "zzz1", snippets, published="2026-01-15")
+    _write_video(tmp_path, "Chan A", "Apple Video", "aaa1", snippets, published="2026-01-15")
+
+    # Create a video with a newer date to verify it sorts first
+    _write_video(tmp_path, "Chan A", "Newest Video", "nnn1", snippets, published="2026-01-20")
+
+    rows = library.scan_library(tmp_path)
+
+    # Should have 3 videos
+    assert len(rows) == 3
+
+    # First should be the newest date
+    assert rows[0]["title"] == "Newest Video"
+    assert rows[0]["published"] == "2026-01-20"
+
+    # Next two should be from 2026-01-15, sorted alphabetically
+    assert rows[1]["title"] == "Apple Video"
+    assert rows[1]["published"] == "2026-01-15"
+
+    assert rows[2]["title"] == "Zebra Video"
+    assert rows[2]["published"] == "2026-01-15"
