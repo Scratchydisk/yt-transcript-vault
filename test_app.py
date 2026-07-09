@@ -203,6 +203,36 @@ def test_semantic_search_ranks_by_cosine(tmp_path, monkeypatch):
     assert "score" in hits[0]
 
 
+def test_default_embed_caches_local_model(monkeypatch):
+    # Prove _default_embed builds the (slow, multi-second) ONNX model once per
+    # model name, not once per call. Fake out fastembed entirely -- no real
+    # model download.
+    import sys
+    import types
+
+    build_count = {"n": 0}
+
+    class FakeTextEmbedding:
+        def __init__(self, model_name):
+            build_count["n"] += 1
+            self.model_name = model_name
+
+        def embed(self, texts):
+            return [np.zeros(3, dtype="float32") for _ in texts]
+
+    fake_module = types.ModuleType("fastembed")
+    fake_module.TextEmbedding = FakeTextEmbedding
+    monkeypatch.setitem(sys.modules, "fastembed", fake_module)
+    monkeypatch.setattr(library, "_LOCAL_MODELS", {})
+
+    settings = {**library.DEFAULT_SETTINGS, "embedding_provider": "local",
+               "embedding_model": "same-model"}
+    for _ in range(3):
+        library._default_embed(["hello"], settings)
+
+    assert build_count["n"] == 1
+
+
 def test_cache_invalidates_on_model_change(tmp_path, monkeypatch):
     jp = _write_video(tmp_path, "Chan A", "Vid", "aaaaaaaaaaa",
                       [{"text": "hello", "start": 0.0, "duration": 5.0}])

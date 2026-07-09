@@ -154,17 +154,26 @@ def cache_path_for(json_path: str, model_id: str) -> Path:
     return p.with_suffix(f".{slugify_model(model_id)}.npy")
 
 
+_LOCAL_MODELS: dict[str, object] = {}  # cache: model_name -> TextEmbedding instance
+
+
+def _get_local_model(model_name: str):
+    if model_name not in _LOCAL_MODELS:
+        try:
+            from fastembed import TextEmbedding
+        except ImportError as exc:
+            raise RuntimeError(
+                "Local embeddings unavailable on this Python — configure an API "
+                "embedding endpoint in Settings."
+            ) from exc
+        _LOCAL_MODELS[model_name] = TextEmbedding(model_name=model_name)
+    return _LOCAL_MODELS[model_name]
+
+
 def _default_embed(texts: list[str], settings: dict) -> "np.ndarray":
     if settings["embedding_provider"] == "api":
         return _api_embed(texts, settings)
-    try:
-        from fastembed import TextEmbedding
-    except ImportError as exc:
-        raise RuntimeError(
-            "Local embeddings unavailable on this Python — configure an API "
-            "embedding endpoint in Settings."
-        ) from exc
-    model = TextEmbedding(model_name=settings["embedding_model"])
+    model = _get_local_model(settings["embedding_model"])
     return np.array(list(model.embed(texts)), dtype="float32")
 
 
