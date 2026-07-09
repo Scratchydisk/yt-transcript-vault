@@ -5,7 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Purpose
 
 Given a YouTube video URL, fetch its transcript and save it to disk as both raw JSON
-and AI-ready Markdown, organized by channel.
+and AI-ready Markdown, organized by channel. A Gradio web UI (`app.py`) sits on top for
+browsing, keyword + semantic search, viewing transcripts with a timestamp-seekable
+player, and chatting with the transcripts via an OpenAI-compatible LLM.
 
 ## Commands
 
@@ -58,15 +60,15 @@ mv transcripts/* "$(venv/bin/python -c 'import transcribe; print(transcribe.defa
   - **Flow**: `extract_video_id` → `fetch_metadata` (oEmbed + fallbacks) → `fetch_publish_date` → fetch transcript (any available language if preferred not found) → `paragraphize` → write JSON + Markdown.
   - **Exit codes**: `2` = unparseable URL; `1` = transcript unavailable; `0` = success.
 
-- **`library.py`**: Data logic for the UI. Scan transcripts, keyword search (capped at 50 hits), chunking, embeddings, semantic search, chat, settings.
+- **`library.py`**: Data logic for the UI. Scan transcripts, keyword search (capped at 20 hits per video / 200 total), chunking, embeddings, semantic search, chat, settings.
   - **Semantic search**: embeddings via `fastembed` (local `BAAI/bge-small-en-v1.5`) or OpenAI-compatible API, cached per-file with mtime+model-id key.
   - **Chat**: retrieves top-K chunks, calls OpenAI-compatible endpoint, cites sources as `[title @ mm:ss]`.
   - **Settings** (`config.json`): API endpoints, model names, user preferences. Saved with `0600` mode, sensitive keys are masked in UI output.
 
 - **`app.py`**: Gradio web UI. Runs on 127.0.0.1 (localhost, no share), opens browser.
-  - **Tabs**: Transcripts (table with column search + sort), Semantic Search (fastembed or API), Chat (QA with citations), Markdown Viewer.
-  - **Player**: YouTube iframe with seek links (via `ytSeek` JS injected into demo; cites within-video timestamps).
-  - **Settings**: manage API endpoints, language preferences, embedding model.
+  - **Layout**: left panel = "Add a video" box + a single search box with a Keyword/Semantic mode toggle (radio) over a results/library table; right panel = tabs **Viewer / Markdown / Chat / Settings**.
+  - **Player**: YouTube iframe (`enablejsapi=1`); the `ytSeek(seconds)` JS is defined once via `demo.load(js=...)` and each `[m:ss]` transcript stamp calls it via `postMessage` (seeking the currently-loaded video). Selecting a search hit loads that video — including a different one — and seeks to the hit timestamp.
+  - **Settings**: embedding provider (local/API), OpenAI-compatible base URL + API key (masked) + embedding/chat model names; saved to `config.json`.
 
 ### Launchers
 
