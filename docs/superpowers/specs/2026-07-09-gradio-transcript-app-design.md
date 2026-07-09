@@ -186,6 +186,15 @@ cache-key invalidation on model change, timestamp formatting, settings
 round-trip. Network, LLM calls, the real embedder, and the UI itself: manual
 smoke check.
 
+## Documentation deliverable
+
+CLAUDE.md currently documents the in-repo `transcripts/` layout and the CLI
+only. The plan **must** include updating it (and adding a short README section)
+to reflect: the new user-space storage location + resolution order, the
+`./app.sh` launch path, and the semantic/chat/settings features. Stale docs
+pointing at the old location would misdirect the user about where transcripts
+now live.
+
 ## Explicitly out of scope (v1)
 
 - Vector database (numpy brute force instead)
