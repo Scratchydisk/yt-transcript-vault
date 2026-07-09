@@ -138,3 +138,29 @@ def test_settings_file_permissions(tmp_path, monkeypatch):
     library.save_settings(library.DEFAULT_SETTINGS.copy())
     mode = stat.S_IMODE((tmp_path / "config.json").stat().st_mode)
     assert mode == 0o600
+
+
+def test_settings_non_dict_json_ignored(tmp_path, monkeypatch):
+    """Verify that non-dict JSON in config.json is ignored, not raising TypeError."""
+    monkeypatch.setattr(library, "config_dir", lambda: tmp_path)
+    config_file = tmp_path / "config.json"
+
+    # Write a non-dict JSON value (list)
+    config_file.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+
+    # Should return defaults without raising
+    result = library.load_settings()
+    assert result["embedding_provider"] == "local"
+
+    # Test with other non-dict values
+    config_file.write_text(json.dumps(42), encoding="utf-8")
+    result = library.load_settings()
+    assert result["embedding_provider"] == "local"
+
+    config_file.write_text(json.dumps("string"), encoding="utf-8")
+    result = library.load_settings()
+    assert result["embedding_provider"] == "local"
+
+    config_file.write_text(json.dumps(None), encoding="utf-8")
+    result = library.load_settings()
+    assert result["embedding_provider"] == "local"

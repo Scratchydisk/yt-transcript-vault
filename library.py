@@ -97,7 +97,9 @@ def load_settings() -> dict:
     p = settings_path()
     if p.exists():
         try:
-            merged.update(json.loads(p.read_text(encoding="utf-8")))
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                merged.update(data)
         except (ValueError, OSError):
             pass
     return merged
