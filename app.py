@@ -194,4 +194,4 @@ with gr.Blocks(title="Transcript Library") as demo:
     save_btn.click(save_settings_ui, [prov, emodel, base, key, cmodel], [save_msg])
 
 if __name__ == "__main__":
-    demo.launch(server_name="127.0.0.1", inbrowser=True, show_api=False)
+    demo.launch(server_name="127.0.0.1", inbrowser=True)
