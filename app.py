@@ -154,8 +154,10 @@ def save_settings_ui(provider, model, base, key, chat_model):
 # Compact the library/search table so all columns fit the narrow left panel
 # instead of scrolling off — smaller font, tighter cell padding.
 TABLE_CSS = """
-#lib-table table td, #lib-table table th { font-size: 10px; padding: 2px 5px; line-height: 1.25; }
-#lib-table table td { vertical-align: top; }
+/* Gradio 6 renders body cells as a virtualized div grid (not <td>), so target
+   everything inside the component — headers AND virtual body cells. */
+#lib-table, #lib-table * { font-size: 10px !important; }
+#lib-table .cell-wrap { padding: 2px 5px !important; line-height: 1.25 !important; }
 """
 
 with gr.Blocks(title="Transcript Library") as demo:
@@ -174,7 +176,8 @@ with gr.Blocks(title="Transcript Library") as demo:
             mode = gr.Radio(["Keyword", "Semantic"], value="Keyword", label="Mode")
             search_note = gr.Markdown("")
             table = gr.Dataframe(headers=LIB_HEADERS, interactive=False, wrap=True,
-                                 elem_id="lib-table", column_widths=LIB_WIDTHS)
+                                 elem_id="lib-table", column_widths=LIB_WIDTHS,
+                                 max_height=460)
         with gr.Column(scale=7):
             with gr.Tab("Viewer"):
                 meta_md = gr.Markdown("")
