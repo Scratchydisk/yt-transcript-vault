@@ -772,10 +772,25 @@ git commit -m "feat: chat over retrieved chunks via OpenAI-compatible endpoint"
 - Consumes: everything in `library.py` + `transcribe.transcribe`, `transcribe.default_data_dir`.
 - Produces: `app.py` runnable as `venv/bin/python app.py` launching Gradio on `127.0.0.1`.
 
-**Design notes carried from spec (build exactly this way):**
-- **Player + transcript are ONE `gr.HTML` block.** It embeds the YouTube IFrame API and defines `ytSeek(sec)`; each `[m:ss]` stamp is `<a href="#" onclick="ytSeek(N);return false">`. Selecting a video re-renders this HTML with the new video id. This is the only client-side JS.
-- **Library/hit table** is a `gr.Dataframe` (plain text) with `.select()` for row-click. No `<mark>` in the table; highlight matches only inside the transcript HTML.
-- **State**: `gr.State` holds the currently-loaded `json_path` (for chat "this video" scope and citation seeks).
+**Design notes (build exactly this way — corrected mechanism):**
+- **Player seek must NOT rely on `<script>` inside `gr.HTML`.** Browsers do not
+  execute `<script>` inserted via innerHTML, which is how Gradio sets HTML
+  content — so a script tag there is silently dead. Instead:
+  - `ytSeek` is defined **once** via `demo.load(js=SEEK_JS)` (Gradio's `js=`
+    hook runs on the client).
+  - The player is a plain `<iframe id="yt-player" … enablejsapi=1>` — renders
+    with no script. Selecting a video re-renders `player_html` with a fresh
+    iframe (same id, new video id + `start`).
+  - `ytSeek(sec)` posts a `seekTo` command to the iframe via `postMessage`.
+    Each `[m:ss]` stamp is `<a onclick="ytSeek(N);return false">` — onclick
+    attributes *do* fire when set via innerHTML (only `<script>` is blocked).
+- **Library/hit table** is a `gr.Dataframe` with clean columns only (no file
+  paths). Row-click reads the full dict from a `gr.State` list by row index —
+  never from the visible cells. No `<mark>` in the table; highlight matches
+  only inside the transcript HTML.
+- **State**: one `visible_state` holds whatever dict-list the table currently
+  shows (library rows or search hits); `current_json` holds the loaded video
+  for chat "this video" scope.
 - **Fetch** shows progress; **localhost bind**; **API key field masked**.
 
 - [ ] **Step 1: Implement `app.py`**
@@ -798,49 +813,51 @@ from transcribe import default_data_dir, transcribe
 ROOT = default_data_dir()
 
 
-def _rows_for_table(rows: list[dict]) -> list[list[str]]:
-    return [[r["channel"], r["title"], r["published"], r["language_code"],
-             r["json_path"]] for r in rows]
+LIB_HEADERS = ["Channel", "Title", "Published", "Lang"]
+HIT_HEADERS = ["Channel", "Title", "Time", "Match"]
+
+# Defined ONCE on the client via demo.load(js=…). Gradio's js= hook executes;
+# a <script> inside gr.HTML would NOT. ytSeek posts a command to the iframe.
+SEEK_JS = """
+() => {
+  window.ytCmd = function(func, args) {
+    var f = document.getElementById('yt-player');
+    if (f && f.contentWindow) {
+      f.contentWindow.postMessage(
+        JSON.stringify({event: 'command', func: func, args: args}), '*');
+    }
+  };
+  window.ytSeek = function(sec) {
+    window.ytCmd('seekTo', [sec, true]);
+    window.ytCmd('playVideo', []);
+  };
+}
+"""
 
 
-def _hit_rows_for_table(hits: list[dict]) -> list[list[str]]:
+def _lib_rows(rows: list[dict]) -> list[list[str]]:
+    return [[r["channel"], r["title"], r["published"], r["language_code"]] for r in rows]
+
+
+def _hit_rows(hits: list[dict]) -> list[list[str]]:
     return [[h["channel"], h["title"], library.format_timestamp(h["start"]),
-             (h["text"][:120] + "…") if len(h["text"]) > 120 else h["text"],
-             h["json_path"], str(h["start"])] for h in hits]
+             (h["text"][:120] + "…") if len(h["text"]) > 120 else h["text"]]
+            for h in hits]
 
 
 def load_library():
     rows = library.scan_library(ROOT)
     stats = f"{len(rows)} videos · {len({r['channel_slug'] for r in rows})} channels"
-    return rows, gr.update(value=_rows_for_table(rows)), stats
+    return rows, gr.update(value=_lib_rows(rows), headers=LIB_HEADERS), stats
 
 
-PLAYER_TEMPLATE = """
-<div id="player-box"></div>
-<script>
-  if (!window._ytReady) {{
-    var tag = document.createElement('script');
-    tag.src = "https://www.youtube.com/iframe_api";
-    document.head.appendChild(tag);
-    window._ytReady = true;
-  }}
-  window.ytSeek = function(sec) {{
-    if (window._ytPlayer && window._ytPlayer.seekTo) {{
-      window._ytPlayer.seekTo(sec, true);
-      window._ytPlayer.playVideo();
-    }}
-  }};
-  function _mountPlayer() {{
-    window._ytPlayer = new YT.Player('player-box', {{
-      height: '360', width: '100%', videoId: '{video_id}',
-      playerVars: {{ start: {start} }}
-    }});
-  }}
-  if (window.YT && window.YT.Player) {{ _mountPlayer(); }}
-  else {{ window.onYouTubeIframeAPIReady = _mountPlayer; }}
-</script>
-<div class="transcript">{transcript_html}</div>
-"""
+def _player_iframe(video_id: str, start: float) -> str:
+    # ponytail: postMessage may no-op if clicked before the iframe's JS-API
+    # handshake completes; fine for v1 — the stamp just needs a second click.
+    return (f'<iframe id="yt-player" width="100%" height="360" frameborder="0" '
+            f'allow="autoplay; encrypted-media" allowfullscreen '
+            f'src="https://www.youtube.com/embed/{video_id}'
+            f'?enablejsapi=1&start={int(start)}&autoplay=1"></iframe>')
 
 
 def _transcript_html(data: dict, highlight: str = "") -> str:
@@ -862,10 +879,8 @@ def _transcript_html(data: dict, highlight: str = "") -> str:
 
 def show_video(json_path: str, seek: float = 0.0, highlight: str = ""):
     data = library.load_transcript(json_path)
-    player = PLAYER_TEMPLATE.format(
-        video_id=data["video_id"], start=int(seek),
-        transcript_html=_transcript_html(data, highlight),
-    )
+    player = (_player_iframe(data["video_id"], seek)
+              + f'<div class="transcript">{_transcript_html(data, highlight)}</div>')
     meta = (f"**{data['title']}**  \n"
             f"Channel: {data['channel']} · Published: {data.get('published') or 'unknown'} "
             f"· Lang: {data['language_code']} · Auto-generated: "
@@ -879,25 +894,20 @@ def show_video(json_path: str, seek: float = 0.0, highlight: str = ""):
 def do_search(query: str, mode: str):
     if not query.strip():
         rows = library.scan_library(ROOT)
-        return gr.update(value=_rows_for_table(rows),
-                         headers=["Channel", "Title", "Published", "Lang", "json"]), \
-               "Full library", []
+        return gr.update(value=_lib_rows(rows), headers=LIB_HEADERS), "Full library", rows
     if mode == "Semantic":
         hits = library.semantic_search(ROOT, query, library.load_settings())
         truncated = False
     else:
         hits, truncated = library.keyword_search(ROOT, query)
     note = f"{len(hits)} matches" + (" (truncated)" if truncated else "")
-    return gr.update(value=_hit_rows_for_table(hits),
-                     headers=["Channel", "Title", "Time", "Match", "json", "secs"]), \
-           note, hits
+    return gr.update(value=_hit_rows(hits), headers=HIT_HEADERS), note, hits
 
 
-def on_row_select(evt: gr.SelectData, table_data, is_search: bool):
-    row = table_data[evt.index[0]]
-    json_path = row[4]
-    seek = float(row[5]) if is_search and len(row) > 5 else 0.0
-    return show_video(json_path, seek)
+def on_row_select(evt: gr.SelectData, visible: list[dict], search_query: str):
+    # Read the full dict from state by row index — never from the visible cells.
+    d = visible[evt.index[0]]
+    return show_video(d["json_path"], d.get("start", 0.0), search_query or "")
 
 
 def do_fetch(url: str, progress=gr.Progress()):
@@ -930,8 +940,7 @@ def save_settings_ui(provider, model, base, key, chat_model):
 
 
 with gr.Blocks(title="Transcript Library") as demo:
-    lib_state = gr.State([])
-    hits_state = gr.State([])
+    visible_state = gr.State([])   # dict-list currently shown in the table
     current_json = gr.State("")
 
     stats_md = gr.Markdown("Loading…")
@@ -945,8 +954,7 @@ with gr.Blocks(title="Transcript Library") as demo:
             search_in = gr.Textbox(label="Search", placeholder="Search transcripts…")
             mode = gr.Radio(["Keyword", "Semantic"], value="Keyword", label="Mode")
             search_note = gr.Markdown("")
-            table = gr.Dataframe(headers=["Channel", "Title", "Published", "Lang", "json"],
-                                 interactive=False, wrap=True)
+            table = gr.Dataframe(headers=LIB_HEADERS, interactive=False, wrap=True)
         with gr.Column(scale=7):
             with gr.Tab("Viewer"):
                 meta_md = gr.Markdown("")
@@ -970,14 +978,13 @@ with gr.Blocks(title="Transcript Library") as demo:
                 save_btn = gr.Button("Save settings")
                 save_msg = gr.Markdown("")
 
-    is_search_flag = gr.State(False)
-
-    demo.load(load_library, outputs=[lib_state, table, stats_md])
+    # js=SEEK_JS defines window.ytSeek on the client at load (executes; a
+    # <script> in gr.HTML would not).
+    demo.load(load_library, outputs=[visible_state, table, stats_md], js=SEEK_JS)
     fetch_btn.click(do_fetch, [url_in], [fetch_msg, table, stats_md])
-    search_in.submit(do_search, [search_in, mode], [table, search_note, hits_state]) \
-        .then(lambda q: bool(q.strip()), [search_in], [is_search_flag])
-    mode.change(do_search, [search_in, mode], [table, search_note, hits_state])
-    table.select(on_row_select, [table, is_search_flag],
+    search_in.submit(do_search, [search_in, mode], [table, search_note, visible_state])
+    mode.change(do_search, [search_in, mode], [table, search_note, visible_state])
+    table.select(on_row_select, [visible_state, search_in],
                  [player_html, meta_md, md_view, current_json])
     chat_btn.click(do_chat, [chat_in, chat_scope, current_json], [chat_out])
     save_btn.click(save_settings_ui, [prov, emodel, base, key, cmodel], [save_msg])
@@ -1102,8 +1109,8 @@ git commit -m "feat: self-bootstrapping launchers + gitignore + docs update"
 - Local (fastembed) + API embeddings, verify-first wheel check → Task 4 ✓
 - Semantic search (cosine, lazy embed) → Task 4 ✓
 - Chat (retrieval + OpenAI-compatible, cite [title @ mm:ss], not-configured message) → Task 5 (+ UI Task 6) ✓
-- Player seek mechanism (single gr.HTML + IFrame API + ytSeek) → Task 6 ✓
-- Table = gr.Dataframe + .select(), highlight in viewer only → Task 6 ✓
+- Player seek mechanism (iframe `enablejsapi=1` + `ytSeek` via `demo.load(js=…)` + `postMessage` — NOT a `<script>` in gr.HTML) → Task 6 ✓
+- Table = gr.Dataframe + .select() reading from `visible_state`, clean columns, highlight in viewer only → Task 6 ✓
 - Chat citation cross-video seek + YouTube fallback → **partially** Task 6 (within-video ytSeek + "Open on YouTube" present; cross-video click-to-load from chat text is not wired because chat output is Markdown). See note below.
 - Markdown tab → Task 6 ✓
 - Localhost bind, no share → Task 6 ✓
