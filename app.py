@@ -156,7 +156,7 @@ def save_settings_ui(provider, model, base, key, chat_model):
 TABLE_CSS = """
 /* Gradio 6 renders body cells as a virtualized div grid (not <td>), so target
    everything inside the component — headers AND virtual body cells. */
-#lib-table, #lib-table * { font-size: 10px !important; }
+#lib-table, #lib-table * { font-size: 12px !important; }
 #lib-table .cell-wrap { padding: 2px 5px !important; line-height: 1.25 !important; }
 """
 
