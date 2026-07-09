@@ -20,7 +20,22 @@ https://claude.ai/code/artifact/1fb0c855-7d11-45f2-9d68-3ca234db2c0f
 | `app.py` | New. Gradio UI only — no business logic |
 | `app.sh` / `app.bat` | Self-bootstrapping launchers |
 | `test_app.py` | Tests for the pure functions |
-| `requirements.txt` | + `gradio`, `fastembed`, `numpy` |
+| `requirements.txt` | + `gradio`, `numpy`, and `fastembed` **if** it installs on this interpreter (see dependency risk below) |
+
+### Dependency risk — verify before building semantic search
+
+This repo is pinned to **Python 3.14.4** (`youtube-transcript-api` requires
+`<3.15`). `fastembed` depends on `onnxruntime`, which historically lags new
+Python releases. **The plan's first semantic-search task must verify a
+`cp314` wheel installs** (`pip install fastembed` in the venv). If it does
+not:
+- Local embeddings are unavailable on this interpreter. The app still ships
+  keyword search + viewer + chat; semantic search and library-wide chat
+  retrieval require the **API embedding provider** (Settings → `/embeddings`
+  route), which needs no local wheel.
+- The Settings tab surfaces this clearly ("local embeddings unavailable on
+  this Python; configure an API embedding endpoint") rather than crashing.
+This keeps the app fully functional regardless of wheel availability.
 
 ## Storage (housekeeping)
 
@@ -33,7 +48,8 @@ Transcripts move out of the repo into user space:
   - Else: `$XDG_DATA_HOME/youtube-transcribe` or `~/.local/share/youtube-transcribe`
 - Same resolver shared by CLI and app.
 - Migration: user moves the existing `transcripts/` folder manually (one-time,
-  documented in README/CLAUDE.md). `transcripts/` added to `.gitignore` either way.
+  documented in README/CLAUDE.md). `transcripts/` and `venv/` added to
+  `.gitignore` either way.
 - Settings: `config.json` in `~/.config/youtube-transcribe` (respecting
   `$XDG_CONFIG_HOME`) on Linux/macOS; on Windows it lives in the same
   `%APPDATA%\youtube-transcribe` folder as the transcripts.
@@ -106,7 +122,8 @@ Transcripts move out of the repo into user space:
   Embedded with **fastembed** (`BAAI/bge-small-en-v1.5`, ONNX — no torch).
 - **Cache correctness**: vectors cached per video as `.npy` beside the JSON.
   The cache is keyed on **both** the JSON mtime **and the embedding model
-  identity** (provider + model name), stored in a small sidecar or the npy
+  identity** (provider + model name, slugified — the model id contains `/`
+  which is not filename-safe), stored in a small sidecar or the npy
   filename. Switching embedding model (e.g. local 384-dim bge-small → an API
   model of different dimension) invalidates the cache — otherwise cosine
   similarity would compare vectors from different spaces and return garbage.
