@@ -164,3 +164,59 @@ def test_settings_non_dict_json_ignored(tmp_path, monkeypatch):
     config_file.write_text(json.dumps(None), encoding="utf-8")
     result = library.load_settings()
     assert result["embedding_provider"] == "local"
+
+
+# Task 4: Chunking + embedding cache + semantic search
+import numpy as np
+
+
+def test_chunk_snippets_windows():
+    snips = [{"text": f"s{i}", "start": float(i * 10), "duration": 10.0} for i in range(10)]
+    chunks = library.chunk_snippets(snips, window_seconds=45.0)
+    assert chunks[0]["start"] == 0.0
+    assert chunks[0]["text"].startswith("s0")
+    # first chunk spans starts 0,10,20,30,40 (<=45 from 0) -> next chunk starts at 50
+    assert chunks[1]["start"] == 50.0
+
+
+def test_semantic_search_ranks_by_cosine(tmp_path, monkeypatch):
+    # Two snippets; fake embedder maps text -> fixed vectors so ranking is deterministic.
+    _write_video(tmp_path, "Chan A", "Vid", "aaaaaaaaaaa", [
+        {"text": "cats and dogs", "start": 0.0, "duration": 40.0},
+        {"text": "quantum physics", "start": 60.0, "duration": 40.0},
+    ])
+    vectors = {
+        "cats and dogs": np.array([1.0, 0.0], dtype="float32"),
+        "quantum physics": np.array([0.0, 1.0], dtype="float32"),
+        "kittens": np.array([0.9, 0.1], dtype="float32"),   # query
+    }
+
+    def fake_embed(texts, settings):
+        return np.vstack([vectors[t] for t in texts])
+
+    monkeypatch.setattr(library, "_EMBED_FN", fake_embed)
+    monkeypatch.setattr(library, "load_settings",
+                        lambda: {**library.DEFAULT_SETTINGS})
+    hits = library.semantic_search(tmp_path, "kittens",
+                                   library.DEFAULT_SETTINGS, top_k=2)
+    assert hits[0]["text"].startswith("cats")   # closest to the query vector
+    assert "score" in hits[0]
+
+
+def test_cache_invalidates_on_model_change(tmp_path, monkeypatch):
+    jp = _write_video(tmp_path, "Chan A", "Vid", "aaaaaaaaaaa",
+                      [{"text": "hello", "start": 0.0, "duration": 5.0}])
+    calls = {"n": 0}
+
+    def fake_embed(texts, settings):
+        calls["n"] += 1
+        return np.ones((len(texts), 3), dtype="float32")
+
+    monkeypatch.setattr(library, "_EMBED_FN", fake_embed)
+    s1 = {**library.DEFAULT_SETTINGS, "embedding_model": "model-a"}
+    s2 = {**library.DEFAULT_SETTINGS, "embedding_model": "model-b"}
+    library.embed_video(str(jp), s1)
+    library.embed_video(str(jp), s1)   # cached, no new embed call
+    assert calls["n"] == 1
+    library.embed_video(str(jp), s2)   # different model -> re-embed
+    assert calls["n"] == 2

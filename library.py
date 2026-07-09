@@ -6,8 +6,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
+
+import numpy as np
 
 from transcribe import config_dir
 
@@ -113,3 +116,116 @@ def save_settings(settings: dict) -> None:
         os.chmod(p, 0o600)
     except OSError:
         pass  # ponytail: best-effort on filesystems without POSIX perms (Windows)
+
+
+_EMBED_FN = None  # tests inject a fake; production uses _default_embed
+
+
+def chunk_snippets(snippets: list[dict], window_seconds: float = 45.0) -> list[dict]:
+    chunks: list[dict] = []
+    cur_texts: list[str] = []
+    cur_start: float | None = None
+    for snip in snippets:
+        start = float(snip.get("start", 0.0))
+        text = snip.get("text", "").strip()
+        if not text:
+            continue
+        if cur_start is None:
+            cur_start = start
+        if start - cur_start > window_seconds and cur_texts:
+            chunks.append({"text": " ".join(cur_texts), "start": cur_start})
+            cur_texts, cur_start = [], start
+        cur_texts.append(text)
+    if cur_texts:
+        chunks.append({"text": " ".join(cur_texts), "start": cur_start or 0.0})
+    return chunks
+
+
+def embedding_model_id(settings: dict) -> str:
+    return f"{settings['embedding_provider']}:{settings['embedding_model']}"
+
+
+def slugify_model(model_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", model_id).strip("-")
+
+
+def cache_path_for(json_path: str, model_id: str) -> Path:
+    p = Path(json_path)
+    return p.with_suffix(f".{slugify_model(model_id)}.npy")
+
+
+def _default_embed(texts: list[str], settings: dict) -> "np.ndarray":
+    if settings["embedding_provider"] == "api":
+        return _api_embed(texts, settings)
+    try:
+        from fastembed import TextEmbedding
+    except ImportError as exc:
+        raise RuntimeError(
+            "Local embeddings unavailable on this Python — configure an API "
+            "embedding endpoint in Settings."
+        ) from exc
+    model = TextEmbedding(model_name=settings["embedding_model"])
+    return np.array(list(model.embed(texts)), dtype="float32")
+
+
+def _api_embed(texts: list[str], settings: dict) -> "np.ndarray":
+    import requests
+    resp = requests.post(
+        settings["api_base_url"].rstrip("/") + "/embeddings",
+        headers={"Authorization": f"Bearer {settings['api_key']}"},
+        json={"model": settings["embedding_model"], "input": texts},
+        timeout=60,
+    )
+    resp.raise_for_status()
+    data = resp.json()["data"]
+    return np.array([d["embedding"] for d in data], dtype="float32")
+
+
+def embed_texts(texts: list[str], settings: dict) -> "np.ndarray":
+    fn = _EMBED_FN or _default_embed
+    return fn(texts, settings)
+
+
+def embed_video(json_path: str, settings: dict) -> tuple["np.ndarray", list[dict]]:
+    data = load_transcript(json_path)
+    chunks = chunk_snippets(data.get("snippets", []))
+    model_id = embedding_model_id(settings)
+    cache = cache_path_for(json_path, model_id)
+    src_mtime = Path(json_path).stat().st_mtime
+    if cache.exists() and cache.stat().st_mtime >= src_mtime:
+        return np.load(cache), chunks
+    if not chunks:
+        vectors = np.zeros((0, 1), dtype="float32")
+    else:
+        vectors = embed_texts([c["text"] for c in chunks], settings)
+    np.save(cache, vectors)
+    return vectors, chunks
+
+
+def semantic_search(root: Path, query: str, settings: dict, top_k: int = 20,
+                    only_json: str | None = None) -> list[dict]:
+    query = query.strip()
+    if not query:
+        return []
+    qvec = embed_texts([query], settings)[0]
+    qnorm = np.linalg.norm(qvec) or 1.0
+    rows = scan_library(root)
+    if only_json:
+        rows = [r for r in rows if r["json_path"] == only_json]
+    scored: list[dict] = []
+    for row in rows:
+        vectors, chunks = embed_video(row["json_path"], settings)
+        if len(chunks) == 0 or vectors.shape[0] != len(chunks):
+            continue
+        norms = np.linalg.norm(vectors, axis=1)
+        norms[norms == 0] = 1.0
+        sims = (vectors @ qvec) / (norms * qnorm)
+        for i, chunk in enumerate(chunks):
+            scored.append({
+                "video_id": row["video_id"], "title": row["title"],
+                "channel": row["channel"], "start": chunk["start"],
+                "text": chunk["text"], "json_path": row["json_path"],
+                "score": float(sims[i]),
+            })
+    scored.sort(key=lambda h: h["score"], reverse=True)
+    return scored[:top_k]
