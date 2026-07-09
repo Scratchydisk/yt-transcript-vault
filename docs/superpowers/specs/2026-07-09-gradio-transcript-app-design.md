@@ -15,7 +15,7 @@ https://claude.ai/code/artifact/1fb0c855-7d11-45f2-9d68-3ca234db2c0f
 
 | File | Role |
 |------|------|
-| `transcribe.py` | Existing fetch/save logic, unchanged — plus new `default_data_dir()`; CLI default `--output-dir` switches to it |
+| `transcribe.py` | Existing fetch/save logic + new `default_data_dir()`; `transcribe()` gains a return value (the JSON path) so the app can select the new file — CLI behaviour otherwise unchanged; CLI default `--output-dir` switches to `default_data_dir()` |
 | `library.py` | New. All data logic: scan, keyword search, chunking, embeddings + cache, semantic search, chat retrieval/API calls, settings load/save |
 | `app.py` | New. Gradio UI only — no business logic |
 | `app.sh` / `app.bat` | Self-bootstrapping launchers |
@@ -55,8 +55,21 @@ Transcripts move out of the repo into user space:
    - Title + metadata chips (channel, published, language, auto-generated,
      "Open on YouTube" external link).
    - **Transcript tab**: paragraphs built from timed snippets, each prefixed
-     with a clickable `[mm:ss]` stamp that reloads the iframe at that offset.
+     with a clickable `[mm:ss]` stamp that seeks the player to that offset.
      Search hits highlighted.
+
+   **Player seek mechanism (load-bearing — must be built this way).**
+   Gradio cannot attach click handlers to arbitrary HTML spans, and an
+   `<a>` inside one component cannot reload an iframe in another without a
+   server round-trip. So the player and the transcript live in a **single
+   `gr.HTML` block** that loads the **YouTube IFrame Player API**
+   (`<script src="https://www.youtube.com/iframe_api">`), instantiates a
+   `YT.Player`, and exposes a `ytSeek(seconds)` JS function. Each `[mm:ss]`
+   stamp is `<a href="#" onclick="ytSeek(123); return false">`, so seeking
+   is entirely client-side — no Gradio event, no reload, instant. Selecting
+   a different video re-renders this HTML block (new video ID) via a normal
+   Gradio event. Note: this is the one place the app relies on youtube.com
+   being reachable (as the embed already does).
    - **Markdown tab**: the `.md` file rendered, with its filesystem path shown.
 5. **Chat tab** — scope dropdown (this video / whole library), question box,
    answer with `[title @ mm:ss]` citations rendered as the same seek-links.
@@ -64,8 +77,10 @@ Transcripts move out of the repo into user space:
 6. **Settings tab** — embedding provider (local / API), OpenAI-compatible
    base URL, API key, chat model name, embedding model name. API embedding
    mode calls the endpoint's `/embeddings` route; local mode ignores the
-   endpoint entirely. Saved to `config.json`. Defaults work with zero
-   configuration (local embeddings, chat disabled until an endpoint is set).
+   endpoint entirely. Saved to `config.json`, written with **user-only
+   permissions (0600)**; the API key is **never logged or echoed** in the UI
+   (masked field). Defaults work with zero configuration (local embeddings,
+   chat disabled until an endpoint is set).
 
 ## Search
 
@@ -73,10 +88,20 @@ Transcripts move out of the repo into user space:
   re-read from disk per query (picks up CLI-fetched videos automatically).
   No index. Fine to ~hundreds of videos.
 - **Semantic**: snippets grouped into ~45-second windows (chunk = text +
-  start time). Embedded with **fastembed** (`BAAI/bge-small-en-v1.5`, ONNX —
-  no torch). Vectors cached per video as `.npy` beside the JSON, invalidated
-  by JSON mtime. Query embedding → numpy cosine similarity over all cached
-  vectors → top-k hit rows.
+  start time). Chunking is **deterministic from the JSON**, so only the
+  vectors are cached — chunk text and start times are regenerated on load
+  and mapped to vector rows by position (no separate metadata file).
+  Embedded with **fastembed** (`BAAI/bge-small-en-v1.5`, ONNX — no torch).
+- **Cache correctness**: vectors cached per video as `.npy` beside the JSON.
+  The cache is keyed on **both** the JSON mtime **and the embedding model
+  identity** (provider + model name), stored in a small sidecar or the npy
+  filename. Switching embedding model (e.g. local 384-dim bge-small → an API
+  model of different dimension) invalidates the cache — otherwise cosine
+  similarity would compare vectors from different spaces and return garbage.
+  The query is always embedded with the currently-configured model, and only
+  vectors from that same model are searched.
+- Query embedding → numpy cosine similarity over matching cached vectors →
+  top-k hit rows.
 - Model download (~130MB) happens lazily on first semantic search, with a
   progress message — not at app startup.
 - Explicitly **no vector database**. Upgrade path if the library ever reaches
@@ -99,8 +124,17 @@ Transcripts move out of the repo into user space:
 - `./app.sh` (POSIX) and `app.bat` (Windows): create `venv/` and
   `pip install -r requirements.txt` if missing, then run `app.py`.
 - `app.py` launches Gradio with `inbrowser=True` → browser opens itself.
+- **Bind localhost only** (`server_name="127.0.0.1"`, no `share=True`,
+  no `0.0.0.0`) — this is a personal tool and must not expose transcripts or
+  the API key to the local network.
+- Launchers must use the platform venv path: `venv/bin/…` on POSIX,
+  `venv\Scripts\…` in `app.bat`.
 - Fresh-user path: clone → `./app.sh` → browser tab. No manual steps.
 - `transcribe.sh` gains the same bootstrap check.
+- In-app fetch is slow (network); show a `gr.Progress`/spinner so the UI
+  doesn't look frozen. Autoplay after a timestamp click works because the
+  click is a user gesture; the initial player load may start muted/paused,
+  which is fine.
 
 ## Error handling
 
@@ -114,9 +148,11 @@ Transcripts move out of the repo into user space:
 ## Testing
 
 `test_app.py` (plain pytest, no fixtures): data-dir resolution per platform
-(env-var monkeypatching), chunking windows, keyword search, cosine ranking,
-timestamp formatting, settings round-trip. Network, LLM calls, and the UI
-itself: manual smoke check.
+(env-var monkeypatching), chunking windows, keyword search, cosine ranking
+(**using synthetic hand-written vectors — never downloads the 130MB model**),
+cache-key invalidation on model change, timestamp formatting, settings
+round-trip. Network, LLM calls, the real embedder, and the UI itself: manual
+smoke check.
 
 ## Explicitly out of scope (v1)
 
