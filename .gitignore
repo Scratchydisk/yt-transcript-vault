@@ -1,0 +1,6 @@
+venv/
+transcripts/
+__pycache__/
+*.pyc
+.playwright-mcp/
+.superpowers/
