@@ -238,3 +238,44 @@ def semantic_search(root: Path, query: str, settings: dict, top_k: int = 20,
             })
     scored.sort(key=lambda h: h["score"], reverse=True)
     return scored[:top_k]
+
+
+_CHAT_FN = None  # tests inject; production uses _default_chat
+
+_CHAT_SYSTEM = (
+    "You answer questions about YouTube video transcripts. Use only the "
+    "provided excerpts. Cite every claim inline as [title @ mm:ss] using the "
+    "titles and timestamps shown. If the excerpts don't cover it, say so."
+)
+
+
+def build_chat_prompt(query: str, hits: list[dict]) -> list[dict]:
+    lines = [f"[{h['title']} @ {format_timestamp(h['start'])}] {h['text']}"
+             for h in hits]
+    context = "\n\n".join(lines) if lines else "(no relevant excerpts found)"
+    return [
+        {"role": "system", "content": _CHAT_SYSTEM},
+        {"role": "user", "content": f"Excerpts:\n\n{context}\n\nQuestion: {query}"},
+    ]
+
+
+def _default_chat(messages: list[dict], settings: dict) -> str:
+    import requests
+    resp = requests.post(
+        settings["api_base_url"].rstrip("/") + "/chat/completions",
+        headers={"Authorization": f"Bearer {settings['api_key']}"},
+        json={"model": settings["chat_model"], "messages": messages},
+        timeout=120,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"]
+
+
+def chat(query: str, root: Path, settings: dict, only_json: str | None = None,
+         top_k: int = 8) -> str:
+    if not settings.get("api_base_url") or not settings.get("chat_model"):
+        raise ValueError("Chat is not configured — set an API endpoint and "
+                         "chat model in Settings.")
+    hits = semantic_search(root, query, settings, top_k=top_k, only_json=only_json)
+    fn = _CHAT_FN or _default_chat
+    return fn(build_chat_prompt(query, hits), settings)

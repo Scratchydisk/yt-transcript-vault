@@ -250,3 +250,35 @@ def test_cache_invalidates_on_model_change(tmp_path, monkeypatch):
     assert calls["n"] == 1
     library.embed_video(str(jp), s2)   # different model -> re-embed
     assert calls["n"] == 2
+
+
+# Task 5: Chat over retrieved chunks
+def test_build_chat_prompt_has_citation_instruction():
+    hits = [{"title": "My Vid", "start": 65.0, "text": "hello world",
+             "video_id": "x", "channel": "c", "json_path": "p"}]
+    msgs = library.build_chat_prompt("what is said?", hits)
+    assert msgs[0]["role"] == "system"
+    assert "mm:ss" in msgs[0]["content"].lower() or "@" in msgs[0]["content"]
+    assert "[My Vid @ 1:05]" in msgs[1]["content"]
+
+
+def test_chat_calls_endpoint(tmp_path, monkeypatch):
+    _write_video(tmp_path, "Chan A", "Vid", "aaaaaaaaaaa",
+                 [{"text": "hello", "start": 0.0, "duration": 5.0}])
+    monkeypatch.setattr(library, "semantic_search",
+                        lambda *a, **k: [{"title": "Vid", "start": 0.0,
+                                          "text": "hello", "video_id": "aaaaaaaaaaa",
+                                          "channel": "Chan A", "json_path": "p"}])
+    monkeypatch.setattr(library, "_CHAT_FN",
+                        lambda messages, settings: "The answer [Vid @ 0:00]")
+    s = {**library.DEFAULT_SETTINGS, "api_base_url": "http://x/v1", "chat_model": "m"}
+    out = library.chat("q", tmp_path, s)
+    assert "answer" in out
+
+
+def test_chat_requires_config(tmp_path):
+    try:
+        library.chat("q", tmp_path, library.DEFAULT_SETTINGS)
+        assert False, "expected error"
+    except ValueError as e:
+        assert "Settings" in str(e) or "endpoint" in str(e).lower()
