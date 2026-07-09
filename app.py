@@ -17,6 +17,10 @@ ROOT = default_data_dir()
 
 LIB_HEADERS = ["Channel", "Title", "Published", "Lang"]
 HIT_HEADERS = ["Channel", "Title", "Time", "Match"]
+# Per-view column widths: library wants a wide Title; search wants a wide Match
+# (the snippet), or it wraps to one word per line and rows balloon.
+LIB_WIDTHS = ["22%", "48%", "16%", "14%"]
+HIT_WIDTHS = ["15%", "26%", "9%", "50%"]
 
 # Defined ONCE on the client via demo.load(js=…). Gradio's js= hook executes;
 # a <script> inside gr.HTML would NOT. ytSeek posts a command to the iframe.
@@ -43,14 +47,15 @@ def _lib_rows(rows: list[dict]) -> list[list[str]]:
 
 def _hit_rows(hits: list[dict]) -> list[list[str]]:
     return [[h["channel"], h["title"], library.format_timestamp(h["start"]),
-             (h["text"][:120] + "…") if len(h["text"]) > 120 else h["text"]]
+             (h["text"][:90] + "…") if len(h["text"]) > 90 else h["text"]]
             for h in hits]
 
 
 def load_library():
     rows = library.scan_library(ROOT)
     stats = f"{len(rows)} videos · {len({r['channel_slug'] for r in rows})} channels"
-    return rows, gr.update(value=_lib_rows(rows), headers=LIB_HEADERS), stats
+    return rows, gr.update(value=_lib_rows(rows), headers=LIB_HEADERS,
+                           column_widths=LIB_WIDTHS), stats
 
 
 def _player_iframe(video_id: str, start: float) -> str:
@@ -96,14 +101,16 @@ def show_video(json_path: str, seek: float = 0.0, highlight: str = ""):
 def do_search(query: str, mode: str):
     if not query.strip():
         rows = library.scan_library(ROOT)
-        return gr.update(value=_lib_rows(rows), headers=LIB_HEADERS), "Full library", rows
+        return (gr.update(value=_lib_rows(rows), headers=LIB_HEADERS,
+                          column_widths=LIB_WIDTHS), "Full library", rows)
     if mode == "Semantic":
         hits = library.semantic_search(ROOT, query, library.load_settings())
         truncated = False
     else:
         hits, truncated = library.keyword_search(ROOT, query)
     note = f"{len(hits)} matches" + (" (truncated)" if truncated else "")
-    return gr.update(value=_hit_rows(hits), headers=HIT_HEADERS), note, hits
+    return (gr.update(value=_hit_rows(hits), headers=HIT_HEADERS,
+                      column_widths=HIT_WIDTHS), note, hits)
 
 
 def on_row_select(evt: gr.SelectData, visible: list[dict], search_query: str):
@@ -147,7 +154,7 @@ def save_settings_ui(provider, model, base, key, chat_model):
 # Compact the library/search table so all columns fit the narrow left panel
 # instead of scrolling off — smaller font, tighter cell padding.
 TABLE_CSS = """
-#lib-table table td, #lib-table table th { font-size: 12px; padding: 3px 6px; line-height: 1.3; }
+#lib-table table td, #lib-table table th { font-size: 10px; padding: 2px 5px; line-height: 1.25; }
 #lib-table table td { vertical-align: top; }
 """
 
@@ -167,8 +174,7 @@ with gr.Blocks(title="Transcript Library") as demo:
             mode = gr.Radio(["Keyword", "Semantic"], value="Keyword", label="Mode")
             search_note = gr.Markdown("")
             table = gr.Dataframe(headers=LIB_HEADERS, interactive=False, wrap=True,
-                                 elem_id="lib-table",
-                                 column_widths=["22%", "42%", "14%", "22%"])
+                                 elem_id="lib-table", column_widths=LIB_WIDTHS)
         with gr.Column(scale=7):
             with gr.Tab("Viewer"):
                 meta_md = gr.Markdown("")
