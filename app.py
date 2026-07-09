@@ -113,16 +113,19 @@ def on_row_select(evt: gr.SelectData, visible: list[dict], search_query: str):
 
 
 def do_fetch(url: str, progress=gr.Progress()):
+    # Always return the refreshed rows into visible_state too, or row-select
+    # after a fetch would index a stale list (wrong video / IndexError).
     if not url.strip():
-        return "Enter a URL.", *load_library()[1:]
+        rows, table, stats = load_library()
+        return "Enter a URL.", table, stats, rows
     try:
         progress(0.3, desc="Fetching transcript…")
         transcribe(url, ["en"], ROOT)
-        _, table, stats = load_library()
-        return "Fetched.", table, stats
+        rows, table, stats = load_library()
+        return "Fetched.", table, stats, rows
     except Exception as exc:  # noqa: BLE001 — surface any fetch failure to the UI
-        _, table, stats = load_library()
-        return f"Error: {exc}", table, stats
+        rows, table, stats = load_library()
+        return f"Error: {exc}", table, stats, rows
 
 
 def do_chat(query: str, scope: str, current_json: str):
@@ -141,6 +144,13 @@ def save_settings_ui(provider, model, base, key, chat_model):
     return "Saved."
 
 
+# Compact the library/search table so all columns fit the narrow left panel
+# instead of scrolling off — smaller font, tighter cell padding.
+TABLE_CSS = """
+#lib-table table td, #lib-table table th { font-size: 12px; padding: 3px 6px; line-height: 1.3; }
+#lib-table table td { vertical-align: top; }
+"""
+
 with gr.Blocks(title="Transcript Library") as demo:
     visible_state = gr.State([])   # dict-list currently shown in the table
     current_json = gr.State("")
@@ -156,7 +166,9 @@ with gr.Blocks(title="Transcript Library") as demo:
             search_in = gr.Textbox(label="Search", placeholder="Search transcripts…")
             mode = gr.Radio(["Keyword", "Semantic"], value="Keyword", label="Mode")
             search_note = gr.Markdown("")
-            table = gr.Dataframe(headers=LIB_HEADERS, interactive=False, wrap=True)
+            table = gr.Dataframe(headers=LIB_HEADERS, interactive=False, wrap=True,
+                                 elem_id="lib-table",
+                                 column_widths=["22%", "42%", "14%", "22%"])
         with gr.Column(scale=7):
             with gr.Tab("Viewer"):
                 meta_md = gr.Markdown("")
@@ -185,7 +197,7 @@ with gr.Blocks(title="Transcript Library") as demo:
     # Kept separate so the no-return js can't clobber the data fn's outputs.
     demo.load(None, None, None, js=SEEK_JS)
     demo.load(load_library, outputs=[visible_state, table, stats_md])
-    fetch_btn.click(do_fetch, [url_in], [fetch_msg, table, stats_md])
+    fetch_btn.click(do_fetch, [url_in], [fetch_msg, table, stats_md, visible_state])
     search_in.submit(do_search, [search_in, mode], [table, search_note, visible_state])
     mode.change(do_search, [search_in, mode], [table, search_note, visible_state])
     table.select(on_row_select, [visible_state, search_in],
@@ -194,4 +206,4 @@ with gr.Blocks(title="Transcript Library") as demo:
     save_btn.click(save_settings_ui, [prov, emodel, base, key, cmodel], [save_msg])
 
 if __name__ == "__main__":
-    demo.launch(server_name="127.0.0.1", inbrowser=True)
+    demo.launch(server_name="127.0.0.1", inbrowser=True, css=TABLE_CSS)

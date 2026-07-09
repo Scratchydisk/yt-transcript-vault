@@ -2,4 +2,4 @@ youtube-transcript-api==1.2.4
 requests==2.34.2
 numpy==2.5.1
 fastembed==0.8.0
-gradio
+gradio==6.20.0
