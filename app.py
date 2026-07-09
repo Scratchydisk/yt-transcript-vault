@@ -151,6 +151,26 @@ def save_settings_ui(provider, model, base, key, chat_model):
     return "Saved."
 
 
+def on_provider_change(provider: str, base: str):
+    # Prefill the Ollama default base URL when switching to Ollama with none set.
+    if provider == "ollama" and not base.strip():
+        return library.OLLAMA_BASE_URL
+    return base
+
+
+def discover_models_ui(provider, base, key):
+    settings = {"embedding_provider": provider, "api_base_url": base, "api_key": key}
+    try:
+        found = library.discover_models(settings)
+    except Exception as exc:  # noqa: BLE001 — surface discovery failure in the UI
+        return (gr.update(choices=[library.LOCAL_EMBED_MODEL]), gr.update(),
+                f"Discovery failed: {exc}")
+    emb, chat = found["embedding"], found["chat"]
+    note = (f"Found {len(chat)} model(s)." if chat
+            else f"Local only — {library.LOCAL_EMBED_MODEL} available.")
+    return gr.update(choices=emb), gr.update(choices=chat), note
+
+
 # Compact the library/search table so all columns fit the narrow left panel
 # instead of scrolling off — smaller font, tighter cell padding.
 TABLE_CSS = """
@@ -192,12 +212,24 @@ with gr.Blocks(title="Transcript Library") as demo:
                 chat_out = gr.Markdown("")
             with gr.Tab("Settings"):
                 s = library.load_settings()
-                prov = gr.Radio(["local", "api"], value=s["embedding_provider"],
-                                label="Embedding provider")
-                emodel = gr.Textbox(s["embedding_model"], label="Embedding model")
-                base = gr.Textbox(s["api_base_url"], label="API base URL")
+                # Map the legacy "api" value onto the new "openai" option.
+                _prov = "openai" if s["embedding_provider"] == "api" else s["embedding_provider"]
+                prov = gr.Radio(
+                    [("Local (fastembed)", "local"), ("OpenAI API", "openai"), ("Ollama", "ollama")],
+                    value=_prov, label="Embedding provider")
+                base = gr.Textbox(s["api_base_url"], label="API base URL",
+                                  placeholder="https://api.openai.com/v1")
                 key = gr.Textbox(s["api_key"], label="API key", type="password")
-                cmodel = gr.Textbox(s["chat_model"], label="Chat model")
+                discover_btn = gr.Button("Discover models")
+                discover_msg = gr.Markdown("")
+                emodel = gr.Dropdown(
+                    choices=sorted({library.LOCAL_EMBED_MODEL, s["embedding_model"]}),
+                    value=s["embedding_model"], label="Embedding model",
+                    allow_custom_value=True)
+                cmodel = gr.Dropdown(
+                    choices=[s["chat_model"]] if s["chat_model"] else [],
+                    value=s["chat_model"] or None, label="Chat model",
+                    allow_custom_value=True)
                 save_btn = gr.Button("Save settings")
                 save_msg = gr.Markdown("")
 
@@ -212,6 +244,8 @@ with gr.Blocks(title="Transcript Library") as demo:
     table.select(on_row_select, [visible_state, search_in],
                  [player_html, meta_md, md_view, current_json])
     chat_btn.click(do_chat, [chat_in, chat_scope, current_json], [chat_out])
+    prov.change(on_provider_change, [prov, base], [base])
+    discover_btn.click(discover_models_ui, [prov, base, key], [emodel, cmodel, discover_msg])
     save_btn.click(save_settings_ui, [prov, emodel, base, key, cmodel], [save_msg])
 
 if __name__ == "__main__":

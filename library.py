@@ -82,10 +82,16 @@ def keyword_search(root: Path, query: str, per_video_cap: int = 20,
     return hits, truncated
 
 
+# The local fastembed model that ships by default and is always available
+# (no API, no key) — always offered as an embedding choice.
+LOCAL_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
+# Default base URL prefilled when the user picks the Ollama provider.
+OLLAMA_BASE_URL = "http://localhost:11434/v1"
+
 DEFAULT_SETTINGS = {
-    "embedding_provider": "local",              # "local" | "api"
-    "embedding_model": "BAAI/bge-small-en-v1.5",
-    "api_base_url": "",                         # OpenAI-compatible base, e.g. http://localhost:11434/v1
+    "embedding_provider": "local",              # "local" | "openai" | "ollama"
+    "embedding_model": LOCAL_EMBED_MODEL,
+    "api_base_url": "",                         # OpenAI-compatible base, e.g. https://api.openai.com/v1
     "api_key": "",
     "chat_model": "",
 }
@@ -171,7 +177,9 @@ def _get_local_model(model_name: str):
 
 
 def _default_embed(texts: list[str], settings: dict) -> "np.ndarray":
-    if settings["embedding_provider"] == "api":
+    # Anything other than "local" (openai / ollama / legacy "api") goes through
+    # the OpenAI-compatible /embeddings endpoint.
+    if settings["embedding_provider"] != "local":
         return _api_embed(texts, settings)
     model = _get_local_model(settings["embedding_model"])
     return np.array(list(model.embed(texts)), dtype="float32")
@@ -193,6 +201,41 @@ def _api_embed(texts: list[str], settings: dict) -> "np.ndarray":
 def embed_texts(texts: list[str], settings: dict) -> "np.ndarray":
     fn = _EMBED_FN or _default_embed
     return fn(texts, settings)
+
+
+_MODELS_FN = None  # tests inject a fake; production uses _default_model_ids
+
+
+def _default_model_ids(settings: dict) -> list[str]:
+    """OpenAI-compatible GET <base>/models -> sorted list of model ids."""
+    import requests
+    headers = {}
+    if settings.get("api_key"):
+        headers["Authorization"] = f"Bearer {settings['api_key']}"
+    resp = requests.get(
+        settings["api_base_url"].rstrip("/") + "/models",
+        headers=headers, timeout=30,
+    )
+    resp.raise_for_status()
+    return sorted(m["id"] for m in resp.json().get("data", []) if m.get("id"))
+
+
+def discover_models(settings: dict) -> dict:
+    """Discover selectable models for the current provider.
+
+    Returns {"embedding": [...], "chat": [...]}. The local fastembed model is
+    always offered for embeddings. For openai/ollama, the provider's /models
+    list is added (and used for chat). Raises nothing — API errors yield the
+    local-only fallback so the UI can still show something.
+    """
+    embedding = [LOCAL_EMBED_MODEL]
+    chat: list[str] = []
+    if settings.get("embedding_provider", "local") != "local" or settings.get("api_base_url"):
+        fn = _MODELS_FN or _default_model_ids
+        ids = fn(settings)
+        chat = list(ids)
+        embedding += [m for m in ids if m != LOCAL_EMBED_MODEL]
+    return {"embedding": embedding, "chat": chat}
 
 
 def embed_video(json_path: str, settings: dict) -> tuple["np.ndarray", list[dict]]:

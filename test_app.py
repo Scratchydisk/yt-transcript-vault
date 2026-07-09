@@ -282,3 +282,31 @@ def test_chat_requires_config(tmp_path):
         assert False, "expected error"
     except ValueError as e:
         assert "Settings" in str(e) or "endpoint" in str(e).lower()
+
+
+def test_discover_models_local_only():
+    out = library.discover_models({"embedding_provider": "local", "api_base_url": ""})
+    assert out["embedding"] == [library.LOCAL_EMBED_MODEL]
+    assert out["chat"] == []
+
+
+def test_discover_models_api_always_includes_local(monkeypatch):
+    monkeypatch.setattr(library, "_MODELS_FN",
+                        lambda s: ["gpt-4o", "text-embedding-3-small"])
+    out = library.discover_models({"embedding_provider": "openai",
+                                   "api_base_url": "http://x/v1", "api_key": "k"})
+    assert library.LOCAL_EMBED_MODEL in out["embedding"]          # always offered
+    assert "text-embedding-3-small" in out["embedding"]
+    assert out["chat"] == ["gpt-4o", "text-embedding-3-small"]
+
+
+def test_default_model_ids_parses_and_sorts(monkeypatch):
+    import requests
+
+    class FakeResp:
+        def raise_for_status(self): pass
+        def json(self): return {"data": [{"id": "b-model"}, {"id": "a-model"}, {"nope": 1}]}
+
+    monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResp())
+    ids = library._default_model_ids({"api_base_url": "http://x/v1", "api_key": ""})
+    assert ids == ["a-model", "b-model"]   # sorted, id-less entry skipped
