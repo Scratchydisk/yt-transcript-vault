@@ -50,6 +50,14 @@ Transcripts move out of the repo into user space:
      Both search modes return the same row shape.
    - Selecting any row loads the viewer; selecting a hit row seeks the player
      to the hit timestamp.
+   - **Table rendering**: rows are plain text in a `gr.Dataframe` with its
+     `.select()` event for row-click (Gradio's Dataframe does not render HTML,
+     so there is no `<mark>` highlight *in the table* — the mockup's in-table
+     highlight is aspirational; v1 highlights matches only in the transcript
+     viewer).
+   - **Hit cap**: keyword search caps hits per video and overall (e.g. 20 per
+     video, 200 total) so a common word can't return thousands of rows; the
+     count line notes when results were truncated.
 4. **Right panel: Viewer**
    - YouTube embed iframe (`youtube.com/embed/<id>?start=<sec>&autoplay=1`).
    - Title + metadata chips (channel, published, language, auto-generated,
@@ -72,8 +80,12 @@ Transcripts move out of the repo into user space:
    being reachable (as the embed already does).
    - **Markdown tab**: the `.md` file rendered, with its filesystem path shown.
 5. **Chat tab** — scope dropdown (this video / whole library), question box,
-   answer with `[title @ mm:ss]` citations rendered as the same seek-links.
-   No conversation persistence in v1.
+   answer with `[title @ mm:ss]` citations. **Citation behaviour**: a
+   citation for the currently-loaded video uses the client-side `ytSeek()`;
+   a citation for any other video is wired to a Gradio event that loads that
+   video into the viewer and seeks to the timestamp. Every citation also
+   carries a plain `youtube.com/watch?v=…&t=…s` link as an always-works
+   fallback. No conversation persistence in v1.
 6. **Settings tab** — embedding provider (local / API), OpenAI-compatible
    base URL, API key, chat model name, embedding model name. API embedding
    mode calls the endpoint's `/embeddings` route; local mode ignores the
@@ -110,6 +122,9 @@ Transcripts move out of the repo into user space:
 ## Chat
 
 - Retrieval: semantic top-k chunks (scoped to one video or whole library).
+  Whole-library scope and semantic search **lazily embed any video that
+  lacks a current-model cache** before querying, showing progress — a video
+  fetched by the CLI is embedded on first semantic use, not at fetch time.
 - Generation: OpenAI-compatible `POST /chat/completions` via the configured
   base URL + key + model. One code path covers OpenAI, OpenRouter, Ollama,
   LM Studio. Implemented with `requests` (already a dependency) — the
