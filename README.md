@@ -38,7 +38,8 @@ Requires Python **3.10–3.14** (`youtube-transcript-api` needs `<3.15`).
   or an OpenAI-compatible API, cached per file.
 - **Viewer** with a YouTube player that seeks to any `[m:ss]` transcript stamp.
 - **Chat** — retrieves the most relevant chunks and answers via an
-  OpenAI-compatible endpoint, citing sources as `[title @ mm:ss]`.
+  OpenAI-compatible endpoint, citing sources as `[title @ mm:ss]`. Each citation
+  is a clickable link that opens the video at that timestamp in a new tab.
 
 ## Where transcripts are stored
 
@@ -67,3 +68,7 @@ is git-ignored — your API keys stay local.
 - YouTube may return `RequestBlocked`/`IpBlocked` under heavy use (IP-based);
   `youtube-transcript-api` supports proxies if needed.
 - Exit codes: `2` unparseable URL, `1` transcript unavailable, `0` success.
+
+## License
+
+[MIT](LICENSE) © Stewart McSporran

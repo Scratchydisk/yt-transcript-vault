@@ -136,11 +136,14 @@ def do_fetch(url: str, progress=gr.Progress()):
 
 
 def do_chat(query: str, scope: str, current_json: str):
+    # Generator so the "Thinking…" state renders immediately, before the
+    # (slow) retrieval + LLM call — otherwise the UI looks frozen until done.
+    yield "_Thinking…_"
     try:
         only = current_json if scope == "This video" and current_json else None
-        return library.chat(query, ROOT, library.load_settings(), only_json=only)
+        yield library.chat(query, ROOT, library.load_settings(), only_json=only)
     except Exception as exc:  # noqa: BLE001
-        return f"Error: {exc}"
+        yield f"Error: {exc}"
 
 
 def save_settings_ui(provider, model, base, key, chat_model):
@@ -187,7 +190,7 @@ with gr.Blocks(title="Transcript Library") as demo:
     stats_md = gr.Markdown("Loading…")
     with gr.Row():
         url_in = gr.Textbox(label="Add a video", placeholder="YouTube URL or ID", scale=4)
-        fetch_btn = gr.Button("Fetch", scale=1)
+        fetch_btn = gr.Button("Fetch", scale=1, variant="primary")
     fetch_msg = gr.Markdown("")
 
     with gr.Row():
@@ -208,7 +211,7 @@ with gr.Blocks(title="Transcript Library") as demo:
                 chat_scope = gr.Radio(["This video", "Whole library"],
                                       value="Whole library", label="Scope")
                 chat_in = gr.Textbox(label="Ask")
-                chat_btn = gr.Button("Send")
+                chat_btn = gr.Button("Send", variant="primary")
                 chat_out = gr.Markdown("")
             with gr.Tab("Settings"):
                 s = library.load_settings()
@@ -231,13 +234,13 @@ with gr.Blocks(title="Transcript Library") as demo:
                 base = gr.Textbox(s["api_base_url"], label="API base URL",
                                   placeholder="https://api.openai.com/v1")
                 key = gr.Textbox(s["api_key"], label="API key", type="password")
-                discover_btn = gr.Button("Discover models")
+                discover_btn = gr.Button("Discover models", variant="primary")
                 discover_msg = gr.Markdown("")
                 cmodel = gr.Dropdown(
                     choices=[s["chat_model"]] if s["chat_model"] else [],
                     value=s["chat_model"] or None, label="Chat model",
                     allow_custom_value=True)
-                save_btn = gr.Button("Save settings")
+                save_btn = gr.Button("Save settings", variant="primary")
                 save_msg = gr.Markdown("")
 
     # Two separate load handlers: one pure-JS to define window.ytSeek on the

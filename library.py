@@ -315,6 +315,26 @@ def _default_chat(messages: list[dict], settings: dict) -> str:
     return resp.json()["choices"][0]["message"]["content"]
 
 
+_CITE_RE = re.compile(r"\[([^\]@]+?)\s*@\s*(\d+):(\d{2})(?::(\d{2}))?\]")
+
+
+def link_citations(text: str, hits: list[dict]) -> str:
+    """Turn `[title @ mm:ss]` citations into YouTube deep links (new tab)."""
+    by_title = {h["title"].strip().lower(): h["video_id"] for h in hits}
+
+    def repl(m: re.Match) -> str:
+        vid = by_title.get(m.group(1).strip().lower())
+        if not vid:
+            return m.group(0)  # unknown title — leave as plain text
+        parts = [int(g) for g in m.groups()[1:] if g is not None]
+        secs = parts[0] * 60 + parts[1] if len(parts) == 2 else \
+            parts[0] * 3600 + parts[1] * 60 + parts[2]
+        url = f"https://www.youtube.com/watch?v={vid}&t={secs}s"
+        return f"[{m.group(0)}]({url})"
+
+    return _CITE_RE.sub(repl, text)
+
+
 def chat(query: str, root: Path, settings: dict, only_json: str | None = None,
          top_k: int = 8) -> str:
     if not settings.get("api_base_url") or not settings.get("chat_model"):
@@ -322,4 +342,4 @@ def chat(query: str, root: Path, settings: dict, only_json: str | None = None,
                          "chat model in Settings.")
     hits = semantic_search(root, query, settings, top_k=top_k, only_json=only_json)
     fn = _CHAT_FN or _default_chat
-    return fn(build_chat_prompt(query, hits), settings)
+    return link_citations(fn(build_chat_prompt(query, hits), settings), hits)
