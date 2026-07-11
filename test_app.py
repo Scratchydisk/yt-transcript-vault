@@ -373,6 +373,7 @@ def test_default_chat_stream_parses_sse(monkeypatch):
     import sys, types
 
     class FakeResp:
+        status_code = 200
         def raise_for_status(self): pass
         def iter_lines(self, decode_unicode=False):
             return iter([
@@ -406,6 +407,7 @@ def test_default_chat_stream_suppresses_reasoning_when_think_off(monkeypatch):
     import sys, types
 
     class FakeResp:
+        status_code = 200
         def raise_for_status(self): pass
         def iter_lines(self, decode_unicode=False):
             return iter([
@@ -429,6 +431,7 @@ def _fake_requests_capturing(monkeypatch, lines):
     import sys, types
 
     class FakeResp:
+        status_code = 200
         def raise_for_status(self): pass
         def iter_lines(self, decode_unicode=False):
             return iter(lines)
@@ -450,6 +453,7 @@ def test_ollama_chat_stream_flags_and_parsing(monkeypatch):
         '{"message":{"content":"Answer"}}',
         '{"message":{},"done":true}',
     ])
+    monkeypatch.setattr(library, "_ollama_supports_thinking", lambda s: True)
     s = {"api_base_url": "http://localhost:11434/v1", "api_key": "", "chat_model": "m",
          "num_ctx": 4096, "think": True}
     events = list(library._ollama_chat_stream([{"role": "user", "content": "hi"}], s))
@@ -459,6 +463,58 @@ def test_ollama_chat_stream_flags_and_parsing(monkeypatch):
     assert captured["json"]["think"] is True
     assert captured["json"]["options"] == {"num_ctx": 4096}
     assert captured["headers"] == {}                       # no key → no auth header
+
+
+def test_ollama_chat_stream_omits_think_when_model_unsupported(monkeypatch):
+    # think is on, but the model lacks the 'thinking' capability → degrade
+    # gracefully to a non-thinking request instead of letting Ollama 400.
+    captured = _fake_requests_capturing(monkeypatch, ['{"message":{"content":"Hi"}}'])
+    monkeypatch.setattr(library, "_ollama_supports_thinking", lambda s: False)
+    s = {"api_base_url": "http://localhost:11434/v1", "api_key": "", "chat_model": "m",
+         "think": True}
+    events = list(library._ollama_chat_stream([{"role": "user", "content": "hi"}], s))
+    assert events == [("content", "Hi")]
+    assert "think" not in captured["json"]
+
+
+def test_ollama_supports_thinking_reads_capabilities(monkeypatch):
+    import sys, types
+    monkeypatch.setattr(library, "_OLLAMA_CAPS_CACHE", {})
+
+    class ShowResp:
+        status_code = 200
+        def __init__(self, caps): self._caps = caps
+        def json(self): return {"capabilities": self._caps}
+
+    caps_by_model = {"reason-m": ["thinking", "tools"], "plain-m": ["tools", "completion"]}
+
+    def fake_post(url, **kw):
+        assert url.endswith("/api/show")
+        return ShowResp(caps_by_model[kw["json"]["model"]])
+
+    fake = types.ModuleType("requests"); fake.post = fake_post
+    fake.RequestException = Exception
+    monkeypatch.setitem(sys.modules, "requests", fake)
+
+    base = {"api_base_url": "http://h:11434/v1", "api_key": ""}
+    assert library._ollama_supports_thinking({**base, "chat_model": "reason-m"}) is True
+    assert library._ollama_supports_thinking({**base, "chat_model": "plain-m"}) is False
+
+
+def test_raise_for_status_with_body_surfaces_server_message():
+    class BadResp:
+        status_code = 400
+        url = "http://h/api/chat"
+        text = '{"error":"\\"m\\" does not support thinking"}'
+    try:
+        library._raise_for_status_with_body(BadResp())
+        assert False, "expected error"
+    except RuntimeError as e:
+        assert "400" in str(e) and "does not support thinking" in str(e)
+
+    class OkResp:
+        status_code = 200
+    library._raise_for_status_with_body(OkResp())  # 2xx → no raise
 
 
 def test_ollama_chat_stream_omits_think_and_options_by_default(monkeypatch):
