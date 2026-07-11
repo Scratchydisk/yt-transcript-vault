@@ -335,3 +335,151 @@ def test_default_model_ids_parses_and_sorts(monkeypatch):
     monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResp())
     ids = library._default_model_ids({"api_base_url": "http://x/v1", "api_key": ""})
     assert ids == ["a-model", "b-model"]   # sorted, id-less entry skipped
+
+
+# Task 6: Streaming chat
+def test_chat_stream_accumulates_thinking_and_links_citations(tmp_path, monkeypatch):
+    monkeypatch.setattr(library, "semantic_search",
+                        lambda *a, **k: [{"title": "Vid", "start": 0.0,
+                                          "text": "hello", "video_id": "aaaaaaaaaaa",
+                                          "channel": "C", "json_path": "p"}])
+
+    def fake_stream(messages, settings):
+        yield "thinking", "let me "
+        yield "thinking", "think"
+        yield "content", "See [Vid @ 0:00]"
+
+    monkeypatch.setattr(library, "_CHAT_STREAM_FN", fake_stream)
+    s = {**library.DEFAULT_SETTINGS, "api_base_url": "http://x/v1", "chat_model": "m"}
+    frames = list(library.chat_stream("q", tmp_path, s))
+    assert frames[0] == ("let me ", "")                      # thinking streams first
+    assert frames[-1][0] == "let me think"                   # thinking accumulates
+    assert "youtube.com/watch?v=aaaaaaaaaaa" in frames[-1][1]  # citation linked
+
+
+def test_chat_stream_requires_config(tmp_path):
+    try:
+        list(library.chat_stream("q", tmp_path, library.DEFAULT_SETTINGS))
+        assert False, "expected error"
+    except ValueError as e:
+        assert "Settings" in str(e) or "endpoint" in str(e).lower()
+
+
+def test_default_settings_has_think_off():
+    assert library.DEFAULT_SETTINGS["think"] is False
+
+
+def test_default_chat_stream_parses_sse(monkeypatch):
+    import sys, types
+
+    class FakeResp:
+        def raise_for_status(self): pass
+        def iter_lines(self, decode_unicode=False):
+            return iter([
+                'data: {"choices":[{"delta":{"reasoning_content":"hmm"}}]}',
+                '',
+                'data: {"choices":[{"delta":{"content":"Hi"}}]}',
+                'data: [DONE]',
+                'data: {"choices":[{"delta":{"content":"IGNORED"}}]}',
+            ])
+
+    captured = {}
+
+    def fake_post(url, **kw):
+        captured.update(url=url, json=kw.get("json"), stream=kw.get("stream"),
+                        headers=kw.get("headers"))
+        return FakeResp()
+
+    fake = types.ModuleType("requests"); fake.post = fake_post
+    monkeypatch.setitem(sys.modules, "requests", fake)
+
+    s = {"api_base_url": "http://x/v1", "api_key": "k", "chat_model": "m", "think": True}
+    events = list(library._default_chat_stream([{"role": "user", "content": "hi"}], s))
+    assert events == [("thinking", "hmm"), ("content", "Hi")]
+    assert captured["url"] == "http://x/v1/chat/completions"
+    assert captured["json"]["stream"] is True
+    assert captured["stream"] is True
+    assert captured["headers"] == {"Authorization": "Bearer k"}
+
+
+def test_default_chat_stream_suppresses_reasoning_when_think_off(monkeypatch):
+    import sys, types
+
+    class FakeResp:
+        def raise_for_status(self): pass
+        def iter_lines(self, decode_unicode=False):
+            return iter([
+                'data: {"choices":[{"delta":{"reasoning_content":"hmm"}}]}',
+                'data: {"choices":[{"delta":{"content":"Hi"}}]}',
+                'data: [DONE]',
+            ])
+
+    def fake_post(url, **kw):
+        return FakeResp()
+
+    fake = types.ModuleType("requests"); fake.post = fake_post
+    monkeypatch.setitem(sys.modules, "requests", fake)
+
+    s = {"api_base_url": "http://x/v1", "api_key": "k", "chat_model": "m"}  # no think
+    events = list(library._default_chat_stream([{"role": "user", "content": "hi"}], s))
+    assert events == [("content", "Hi")]
+
+
+def _fake_requests_capturing(monkeypatch, lines):
+    import sys, types
+
+    class FakeResp:
+        def raise_for_status(self): pass
+        def iter_lines(self, decode_unicode=False):
+            return iter(lines)
+
+    captured = {}
+
+    def fake_post(url, **kw):
+        captured.update(url=url, json=kw.get("json"), headers=kw.get("headers"))
+        return FakeResp()
+
+    fake = types.ModuleType("requests"); fake.post = fake_post
+    monkeypatch.setitem(sys.modules, "requests", fake)
+    return captured
+
+
+def test_ollama_chat_stream_flags_and_parsing(monkeypatch):
+    captured = _fake_requests_capturing(monkeypatch, [
+        '{"message":{"thinking":"reason"}}',
+        '{"message":{"content":"Answer"}}',
+        '{"message":{},"done":true}',
+    ])
+    s = {"api_base_url": "http://localhost:11434/v1", "api_key": "", "chat_model": "m",
+         "num_ctx": 4096, "think": True}
+    events = list(library._ollama_chat_stream([{"role": "user", "content": "hi"}], s))
+    assert events == [("thinking", "reason"), ("content", "Answer")]
+    assert captured["url"] == "http://localhost:11434/api/chat"
+    assert captured["json"]["stream"] is True
+    assert captured["json"]["think"] is True
+    assert captured["json"]["options"] == {"num_ctx": 4096}
+    assert captured["headers"] == {}                       # no key → no auth header
+
+
+def test_ollama_chat_stream_omits_think_and_options_by_default(monkeypatch):
+    captured = _fake_requests_capturing(monkeypatch, ['{"message":{"content":"Hi"}}'])
+    s = {"api_base_url": "http://localhost:11434/v1", "api_key": "sk", "chat_model": "m",
+         "num_ctx": 0, "think": False}
+    events = list(library._ollama_chat_stream([{"role": "user", "content": "hi"}], s))
+    assert events == [("content", "Hi")]
+    assert "think" not in captured["json"]
+    assert "options" not in captured["json"]
+    assert captured["headers"] == {"Authorization": "Bearer sk"}  # key present → header
+
+
+import app  # noqa: E402  (builds the Blocks at import; no launch)
+
+
+def test_render_chat_details_open_until_answer():
+    assert app.render_chat("", "") == "_Thinking…_"
+    only_thinking = app.render_chat("reasoning here", "")
+    assert "<details open>" in only_thinking and "reasoning here" in only_thinking
+    with_answer = app.render_chat("reasoning here", "the answer")
+    assert "<details>" in with_answer and "<details open>" not in with_answer
+    assert "the answer" in with_answer
+    assert app.render_chat("", "just answer") == "just answer"

@@ -135,22 +135,44 @@ def do_fetch(url: str, progress=gr.Progress()):
         return f"Error: {exc}", table, stats, rows
 
 
+def render_chat(thinking: str, answer: str) -> str:
+    # <details> is open while only reasoning has arrived, then collapses once the
+    # answer starts, so the reader lands on the answer with reasoning tucked away.
+    if not thinking and not answer:
+        return "_Thinking…_"
+    parts = []
+    if thinking:
+        open_attr = "" if answer else " open"
+        parts.append(f"<details{open_attr}><summary>Thinking…</summary>\n\n"
+                     f"{thinking}\n\n</details>")
+    if answer:
+        parts.append(answer)
+    return "\n\n".join(parts)
+
+
 def do_chat(query: str, scope: str, current_json: str):
-    # Generator so the "Thinking…" state renders immediately, before the
-    # (slow) retrieval + LLM call — otherwise the UI looks frozen until done.
+    # Generator so the "Thinking…" state renders immediately, before the (slow)
+    # retrieval + first token — otherwise the UI looks frozen until done.
     yield "_Thinking…_"
     try:
         only = current_json if scope == "This video" and current_json else None
-        yield library.chat(query, ROOT, library.load_settings(), only_json=only)
+        streamed = False
+        for thinking, answer in library.chat_stream(
+                query, ROOT, library.load_settings(), only_json=only):
+            streamed = True
+            yield render_chat(thinking, answer)
+        if not streamed:
+            yield "_(no response)_"
     except Exception as exc:  # noqa: BLE001
         yield f"Error: {exc}"
 
 
-def save_settings_ui(provider, model, api_type, base, key, chat_model, num_ctx):
+def save_settings_ui(provider, model, api_type, base, key, chat_model, num_ctx, think):
     library.save_settings({
         "embedding_provider": provider, "embedding_model": model,
         "api_type": api_type, "api_base_url": base, "api_key": key,
         "chat_model": chat_model, "num_ctx": int(num_ctx or 0),
+        "think": bool(think),
     })
     return "Saved."
 
@@ -213,7 +235,7 @@ with gr.Blocks(title="Transcript Library") as demo:
                                       value="Whole library", label="Scope")
                 chat_in = gr.Textbox(label="Ask")
                 chat_btn = gr.Button("Send", variant="primary")
-                chat_out = gr.Markdown("")
+                chat_out = gr.Markdown("", sanitize_html=False)
             with gr.Tab("Settings"):
                 s = library.load_settings()
                 # Embedding source is independent of the chat API: "local" uses
@@ -248,6 +270,10 @@ with gr.Blocks(title="Transcript Library") as demo:
                     info="Ollama only; 0 = server default. When > 0, sent to "
                          "Ollama's native /api/chat endpoint (which honours it, "
                          "unlike the /v1 OpenAI-compatible endpoint).")
+                think_cb = gr.Checkbox(
+                    value=s.get("think", False), label="Stream reasoning (think)",
+                    info="Ollama sends think:true; OpenAI shows reasoning only if "
+                         "the server emits it. Only affects models that support it.")
                 save_btn = gr.Button("Save settings", variant="primary")
                 save_msg = gr.Markdown("")
 
@@ -265,7 +291,8 @@ with gr.Blocks(title="Transcript Library") as demo:
     api_type.change(on_api_type_change, [api_type, base], [base])
     discover_btn.click(discover_models_ui, [base, key], [emodel, cmodel, discover_msg])
     save_btn.click(save_settings_ui,
-                   [prov, emodel, api_type, base, key, cmodel, num_ctx], [save_msg])
+                   [prov, emodel, api_type, base, key, cmodel, num_ctx, think_cb],
+                   [save_msg])
 
 if __name__ == "__main__":
     demo.launch(server_name="127.0.0.1", inbrowser=True, css=TABLE_CSS)

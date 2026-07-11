@@ -95,6 +95,7 @@ DEFAULT_SETTINGS = {
     "api_base_url": "",                         # OpenAI-compatible base, e.g. https://api.openai.com/v1
     "api_key": "",
     "chat_model": "",
+    "think": False,                             # request/show model reasoning (Ollama: think=true)
     "num_ctx": 0,                               # Ollama context window; 0 = don't send (server default)
 }
 
@@ -287,6 +288,7 @@ def semantic_search(root: Path, query: str, settings: dict, top_k: int = 20,
 
 
 _CHAT_FN = None  # tests inject; production uses _default_chat
+_CHAT_STREAM_FN = None  # tests inject; production uses _default/_ollama_chat_stream
 
 _CHAT_SYSTEM = (
     "You answer questions about YouTube video transcripts. Use only the "
@@ -320,6 +322,36 @@ def _default_chat(messages: list[dict], settings: dict) -> str:
     return resp.json()["choices"][0]["message"]["content"]
 
 
+def _default_chat_stream(messages: list[dict], settings: dict):
+    import requests
+    payload = {"model": settings["chat_model"], "messages": messages, "stream": True}
+    resp = requests.post(
+        settings["api_base_url"].rstrip("/") + "/chat/completions",
+        headers={"Authorization": f"Bearer {settings['api_key']}"},
+        json=payload,
+        stream=True,
+        timeout=120,
+    )
+    resp.raise_for_status()
+    for raw in resp.iter_lines(decode_unicode=True):
+        if not raw or not raw.startswith("data:"):
+            continue
+        data = raw[len("data:"):].strip()
+        if data == "[DONE]":
+            break
+        try:
+            delta = json.loads(data)["choices"][0]["delta"]
+        except (ValueError, KeyError, IndexError):
+            continue
+        reasoning = (delta.get("reasoning_content") or delta.get("reasoning")) \
+            if settings.get("think") else None
+        if reasoning:
+            yield "thinking", reasoning
+        content = delta.get("content")
+        if content:
+            yield "content", content
+
+
 def _ollama_chat(messages: list[dict], settings: dict) -> str:
     # Ollama's OpenAI-compatible /v1 endpoint silently drops `options` (so
     # num_ctx never takes effect there). Its native /api/chat honours them, so
@@ -345,6 +377,37 @@ def _ollama_chat(messages: list[dict], settings: dict) -> str:
                          json=payload, timeout=120)
     resp.raise_for_status()
     return resp.json()["message"]["content"]
+
+
+def _ollama_chat_stream(messages: list[dict], settings: dict):
+    # Native /api/chat streams NDJSON and honours options/think, unlike the /v1
+    # OpenAI-compatible endpoint. See _ollama_chat for the /v1-base derivation.
+    import requests
+    base = settings["api_base_url"].rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-len("/v1")]
+    payload = {"model": settings["chat_model"], "messages": messages, "stream": True}
+    num_ctx = settings.get("num_ctx") or 0
+    if num_ctx:
+        payload["options"] = {"num_ctx": int(num_ctx)}
+    if settings.get("think"):
+        payload["think"] = True
+    headers = {"Authorization": f"Bearer {settings['api_key']}"} \
+        if settings.get("api_key") else {}
+    resp = requests.post(base.rstrip("/") + "/api/chat", headers=headers,
+                         json=payload, stream=True, timeout=120)
+    resp.raise_for_status()
+    for raw in resp.iter_lines(decode_unicode=True):
+        if not raw:
+            continue
+        try:
+            msg = json.loads(raw).get("message") or {}
+        except ValueError:
+            continue
+        if msg.get("thinking"):
+            yield "thinking", msg["thinking"]
+        if msg.get("content"):
+            yield "content", msg["content"]
 
 
 _CITE_RE = re.compile(r"\[([^\]@]+?)\s*@\s*(\d+):(\d{2})(?::(\d{2}))?\]")
@@ -375,3 +438,28 @@ def chat(query: str, root: Path, settings: dict, only_json: str | None = None,
     hits = semantic_search(root, query, settings, top_k=top_k, only_json=only_json)
     fn = _CHAT_FN or _default_chat
     return link_citations(fn(build_chat_prompt(query, hits), settings), hits)
+
+
+def chat_stream(query: str, root: Path, settings: dict, only_json: str | None = None,
+                top_k: int = 8):
+    """Streaming counterpart to chat(). Yields cumulative (thinking, answer)
+    tuples; `answer` has citations linked on each yield so links appear as soon
+    as a citation completes."""
+    if not settings.get("api_base_url") or not settings.get("chat_model"):
+        raise ValueError("Chat is not configured — set an API endpoint and "
+                         "chat model in Settings.")
+    hits = semantic_search(root, query, settings, top_k=top_k, only_json=only_json)
+    messages = build_chat_prompt(query, hits)
+    if _CHAT_STREAM_FN:
+        streamer = _CHAT_STREAM_FN
+    elif settings.get("api_type") == "ollama":
+        streamer = _ollama_chat_stream
+    else:
+        streamer = _default_chat_stream
+    thinking, answer = "", ""
+    for kind, delta in streamer(messages, settings):
+        if kind == "thinking":
+            thinking += delta
+        else:
+            answer += delta
+        yield thinking, link_citations(answer, hits)

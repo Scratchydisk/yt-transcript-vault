@@ -62,13 +62,16 @@ mv transcripts/* "$(venv/bin/python -c 'import transcribe; print(transcribe.defa
 
 - **`library.py`**: Data logic for the UI. Scan transcripts, keyword search (capped at 20 hits per video / 200 total), chunking, embeddings, semantic search, chat, settings.
   - **Semantic search**: embeddings via `fastembed` (local `BAAI/bge-small-en-v1.5`) or OpenAI-compatible API, cached per-file with mtime+model-id key.
-  - **Chat**: retrieves top-K chunks, calls OpenAI-compatible endpoint, cites sources as `[title @ mm:ss]`.
+  - **Chat**: retrieves top-K chunks, calls the OpenAI-compatible endpoint (SSE)
+    or Ollama's native `/api/chat` (NDJSON) and **streams** the reply; cites
+    sources as `[title @ mm:ss]`. Reasoning ("thinking") is streamed into a
+    collapsible block above the answer when the `think` setting is on.
   - **Settings** (`config.json`): API endpoints, model names, user preferences. Saved with `0600` mode, sensitive keys are masked in UI output.
 
 - **`app.py`**: Gradio web UI. Runs on 127.0.0.1 (localhost, no share), opens browser.
   - **Layout**: left panel = "Add a video" box + a single search box with a Keyword/Semantic mode toggle (radio) over a results/library table; right panel = tabs **Viewer / Markdown / Chat / Settings**.
   - **Player**: YouTube iframe (`enablejsapi=1`); the `ytSeek(seconds)` JS is defined once via `demo.load(js=...)` and each `[m:ss]` transcript stamp calls it via `postMessage` (seeking the currently-loaded video). Selecting a search hit loads that video — including a different one — and seeks to the hit timestamp.
-  - **Settings**: embedding provider (local/API), OpenAI-compatible base URL + API key (masked) + embedding/chat model names; saved to `config.json`.
+  - **Settings**: embedding provider (local/API), OpenAI-compatible base URL + API key (masked) + embedding/chat model names; API type (OpenAI/Ollama); num_ctx (Ollama); "Stream reasoning (think)" toggle; saved to `config.json`.
 
 ### Launchers
 
