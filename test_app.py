@@ -335,3 +335,35 @@ def test_default_model_ids_parses_and_sorts(monkeypatch):
     monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResp())
     ids = library._default_model_ids({"api_base_url": "http://x/v1", "api_key": ""})
     assert ids == ["a-model", "b-model"]   # sorted, id-less entry skipped
+
+
+# Task 6: Streaming chat
+def test_chat_stream_accumulates_thinking_and_links_citations(tmp_path, monkeypatch):
+    monkeypatch.setattr(library, "semantic_search",
+                        lambda *a, **k: [{"title": "Vid", "start": 0.0,
+                                          "text": "hello", "video_id": "aaaaaaaaaaa",
+                                          "channel": "C", "json_path": "p"}])
+
+    def fake_stream(messages, settings):
+        yield "thinking", "let me "
+        yield "thinking", "think"
+        yield "content", "See [Vid @ 0:00]"
+
+    monkeypatch.setattr(library, "_CHAT_STREAM_FN", fake_stream)
+    s = {**library.DEFAULT_SETTINGS, "api_base_url": "http://x/v1", "chat_model": "m"}
+    frames = list(library.chat_stream("q", tmp_path, s))
+    assert frames[0] == ("let me ", "")                      # thinking streams first
+    assert frames[-1][0] == "let me think"                   # thinking accumulates
+    assert "youtube.com/watch?v=aaaaaaaaaaa" in frames[-1][1]  # citation linked
+
+
+def test_chat_stream_requires_config(tmp_path):
+    try:
+        list(library.chat_stream("q", tmp_path, library.DEFAULT_SETTINGS))
+        assert False, "expected error"
+    except ValueError as e:
+        assert "Settings" in str(e) or "endpoint" in str(e).lower()
+
+
+def test_default_settings_has_think_off():
+    assert library.DEFAULT_SETTINGS["think"] is False

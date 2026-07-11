@@ -95,6 +95,7 @@ DEFAULT_SETTINGS = {
     "api_base_url": "",                         # OpenAI-compatible base, e.g. https://api.openai.com/v1
     "api_key": "",
     "chat_model": "",
+    "think": False,                             # request/show model reasoning (Ollama: think=true)
     "num_ctx": 0,                               # Ollama context window; 0 = don't send (server default)
 }
 
@@ -287,6 +288,7 @@ def semantic_search(root: Path, query: str, settings: dict, top_k: int = 20,
 
 
 _CHAT_FN = None  # tests inject; production uses _default_chat
+_CHAT_STREAM_FN = None  # tests inject; production uses _default/_ollama_chat_stream
 
 _CHAT_SYSTEM = (
     "You answer questions about YouTube video transcripts. Use only the "
@@ -375,3 +377,28 @@ def chat(query: str, root: Path, settings: dict, only_json: str | None = None,
     hits = semantic_search(root, query, settings, top_k=top_k, only_json=only_json)
     fn = _CHAT_FN or _default_chat
     return link_citations(fn(build_chat_prompt(query, hits), settings), hits)
+
+
+def chat_stream(query: str, root: Path, settings: dict, only_json: str | None = None,
+                top_k: int = 8):
+    """Streaming counterpart to chat(). Yields cumulative (thinking, answer)
+    tuples; `answer` has citations linked on each yield so links appear as soon
+    as a citation completes."""
+    if not settings.get("api_base_url") or not settings.get("chat_model"):
+        raise ValueError("Chat is not configured — set an API endpoint and "
+                         "chat model in Settings.")
+    hits = semantic_search(root, query, settings, top_k=top_k, only_json=only_json)
+    messages = build_chat_prompt(query, hits)
+    if _CHAT_STREAM_FN:
+        streamer = _CHAT_STREAM_FN
+    elif settings.get("api_type") == "ollama":
+        streamer = _ollama_chat_stream
+    else:
+        streamer = _default_chat_stream
+    thinking, answer = "", ""
+    for kind, delta in streamer(messages, settings):
+        if kind == "thinking":
+            thinking += delta
+        else:
+            answer += delta
+        yield thinking, link_citations(answer, hits)
