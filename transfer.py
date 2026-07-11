@@ -9,6 +9,10 @@ import json
 import zipfile
 from pathlib import Path
 
+# An importable transcript entry: 'channel-slug/name.json' — exactly one slash,
+# non-empty parts. Excludes top-level files (config.json) and nested junk.
+_ENTRY_RE = __import__("re").compile(r"^([^/]+)/([^/]+)\.json$")
+
 
 def export_zip(root: Path, dest: Path, include_config: bool = False,
                config_path: Path | None = None) -> Path:
@@ -25,3 +29,31 @@ def export_zip(root: Path, dest: Path, include_config: bool = False,
         if include_config and config_path and Path(config_path).exists():
             zf.write(config_path, arcname="config.json")
     return Path(dest)
+
+
+def inspect_zip(zip_path: Path, root: Path) -> list[dict]:
+    """List transcript entries in the zip, flagging which already exist under root."""
+    root = Path(root)
+    entries: list[dict] = []
+    with zipfile.ZipFile(zip_path) as zf:
+        names = set(zf.namelist())
+        for name in sorted(names):
+            m = _ENTRY_RE.match(name)
+            if not m:
+                continue
+            channel_slug, stem = m.group(1), m.group(2)
+            try:
+                data = json.loads(zf.read(name).decode("utf-8"))
+                title = data.get("title") or stem
+            except (ValueError, OSError, KeyError):
+                title = stem
+            md_arcname = f"{channel_slug}/{stem}.md"
+            entries.append({
+                "channel_slug": channel_slug,
+                "name": stem,
+                "title": title,
+                "json_arcname": name,
+                "md_arcname": md_arcname if md_arcname in names else None,
+                "duplicate": (root / channel_slug / f"{stem}.json").exists(),
+            })
+    return entries

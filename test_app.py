@@ -598,3 +598,28 @@ def test_export_zip_includes_config_when_asked(tmp_path):
     transfer.export_zip(root, dest, include_config=True, config_path=cfg)
     names = set(zipfile.ZipFile(dest).namelist())
     assert "config.json" in names
+
+
+def test_inspect_zip_lists_entries_and_flags_duplicates(tmp_path):
+    # Build a source library and export it.
+    src = tmp_path / "src"
+    _write_video(src, "Chan A", "Alpha", "aaaaaaaaaaa",
+                 [{"text": "hi", "start": 0.0, "duration": 1.0}])
+    _write_video(src, "Chan B", "Beta", "bbbbbbbbbbb",
+                 [{"text": "yo", "start": 0.0, "duration": 1.0}])
+    zip_path = tmp_path / "exp.zip"
+    transfer.export_zip(src, zip_path)
+
+    # Local root already has Chan A / Alpha → that entry is a duplicate.
+    local = tmp_path / "local"
+    _write_video(local, "Chan A", "Alpha", "aaaaaaaaaaa",
+                 [{"text": "hi", "start": 0.0, "duration": 1.0}])
+
+    entries = transfer.inspect_zip(zip_path, local)
+    by_arc = {e["json_arcname"]: e for e in entries}
+
+    assert by_arc["chan-a/alpha.json"]["duplicate"] is True
+    assert by_arc["chan-b/beta.json"]["duplicate"] is False
+    assert by_arc["chan-b/beta.json"]["title"] == "Beta"
+    assert by_arc["chan-b/beta.json"]["channel_slug"] == "chan-b"
+    assert by_arc["chan-b/beta.json"]["md_arcname"] is None  # _write_video writes no .md
