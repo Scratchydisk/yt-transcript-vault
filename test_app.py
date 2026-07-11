@@ -447,3 +447,16 @@ def test_ollama_chat_stream_omits_think_and_options_by_default(monkeypatch):
     assert "think" not in captured["json"]
     assert "options" not in captured["json"]
     assert captured["headers"] == {"Authorization": "Bearer sk"}  # key present → header
+
+
+import app  # noqa: E402  (builds the Blocks at import; no launch)
+
+
+def test_render_chat_details_open_until_answer():
+    assert app.render_chat("", "") == "_Thinking…_"
+    only_thinking = app.render_chat("reasoning here", "")
+    assert "<details open>" in only_thinking and "reasoning here" in only_thinking
+    with_answer = app.render_chat("reasoning here", "the answer")
+    assert "<details>" in with_answer and "<details open>" not in with_answer
+    assert "the answer" in with_answer
+    assert app.render_chat("", "just answer") == "just answer"
