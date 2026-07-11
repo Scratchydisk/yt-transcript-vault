@@ -146,10 +146,11 @@ def do_chat(query: str, scope: str, current_json: str):
         yield f"Error: {exc}"
 
 
-def save_settings_ui(provider, model, base, key, chat_model):
+def save_settings_ui(provider, model, api_type, base, key, chat_model, num_ctx):
     library.save_settings({
         "embedding_provider": provider, "embedding_model": model,
-        "api_base_url": base, "api_key": key, "chat_model": chat_model,
+        "api_type": api_type, "api_base_url": base, "api_key": key,
+        "chat_model": chat_model, "num_ctx": int(num_ctx or 0),
     })
     return "Saved."
 
@@ -230,7 +231,8 @@ with gr.Blocks(title="Transcript Library") as demo:
                             "Used for chat. Also used for embeddings only if "
                             "\"Use the API\" is selected above.")
                 api_type = gr.Radio([("OpenAI", "openai"), ("Ollama", "ollama")],
-                                     value="openai", label="API type (prefills base URL)")
+                                     value=s.get("api_type", "openai"),
+                                     label="API type")
                 base = gr.Textbox(s["api_base_url"], label="API base URL",
                                   placeholder="https://api.openai.com/v1")
                 key = gr.Textbox(s["api_key"], label="API key", type="password")
@@ -240,6 +242,12 @@ with gr.Blocks(title="Transcript Library") as demo:
                     choices=[s["chat_model"]] if s["chat_model"] else [],
                     value=s["chat_model"] or None, label="Chat model",
                     allow_custom_value=True)
+                num_ctx = gr.Number(
+                    value=s.get("num_ctx") or 0, precision=0, minimum=0,
+                    label="num_ctx (Ollama context window)",
+                    info="Ollama only; 0 = server default. When > 0, sent to "
+                         "Ollama's native /api/chat endpoint (which honours it, "
+                         "unlike the /v1 OpenAI-compatible endpoint).")
                 save_btn = gr.Button("Save settings", variant="primary")
                 save_msg = gr.Markdown("")
 
@@ -256,7 +264,8 @@ with gr.Blocks(title="Transcript Library") as demo:
     chat_btn.click(do_chat, [chat_in, chat_scope, current_json], [chat_out])
     api_type.change(on_api_type_change, [api_type, base], [base])
     discover_btn.click(discover_models_ui, [base, key], [emodel, cmodel, discover_msg])
-    save_btn.click(save_settings_ui, [prov, emodel, base, key, cmodel], [save_msg])
+    save_btn.click(save_settings_ui,
+                   [prov, emodel, api_type, base, key, cmodel, num_ctx], [save_msg])
 
 if __name__ == "__main__":
     demo.launch(server_name="127.0.0.1", inbrowser=True, css=TABLE_CSS)

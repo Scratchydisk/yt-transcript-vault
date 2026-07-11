@@ -91,9 +91,11 @@ OLLAMA_BASE_URL = "http://localhost:11434/v1"
 DEFAULT_SETTINGS = {
     "embedding_provider": "local",              # "local" (fastembed) | "api" (OpenAI-compatible)
     "embedding_model": LOCAL_EMBED_MODEL,
+    "api_type": "openai",                       # "openai" | "ollama" — picks the chat endpoint
     "api_base_url": "",                         # OpenAI-compatible base, e.g. https://api.openai.com/v1
     "api_key": "",
     "chat_model": "",
+    "num_ctx": 0,                               # Ollama context window; 0 = don't send (server default)
 }
 
 
@@ -304,15 +306,45 @@ def build_chat_prompt(query: str, hits: list[dict]) -> list[dict]:
 
 
 def _default_chat(messages: list[dict], settings: dict) -> str:
+    if settings.get("api_type") == "ollama":
+        return _ollama_chat(messages, settings)
     import requests
+    payload = {"model": settings["chat_model"], "messages": messages}
     resp = requests.post(
         settings["api_base_url"].rstrip("/") + "/chat/completions",
         headers={"Authorization": f"Bearer {settings['api_key']}"},
-        json={"model": settings["chat_model"], "messages": messages},
+        json=payload,
         timeout=120,
     )
     resp.raise_for_status()
     return resp.json()["choices"][0]["message"]["content"]
+
+
+def _ollama_chat(messages: list[dict], settings: dict) -> str:
+    # Ollama's OpenAI-compatible /v1 endpoint silently drops `options` (so
+    # num_ctx never takes effect there). Its native /api/chat honours them, so
+    # we call that directly when the API type is Ollama.
+    import requests
+    # Settings store the /v1 base (used for embeddings + model discovery); the
+    # native API lives at the host root under /api/chat.
+    base = settings["api_base_url"].rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-len("/v1")]
+    payload = {
+        "model": settings["chat_model"],
+        "messages": messages,
+        "stream": False,
+    }
+    num_ctx = settings.get("num_ctx") or 0
+    if num_ctx:
+        payload["options"] = {"num_ctx": int(num_ctx)}
+    # Ollama needs no auth; forward a key only if one is set (e.g. behind a proxy).
+    headers = {"Authorization": f"Bearer {settings['api_key']}"} \
+        if settings.get("api_key") else {}
+    resp = requests.post(base.rstrip("/") + "/api/chat", headers=headers,
+                         json=payload, timeout=120)
+    resp.raise_for_status()
+    return resp.json()["message"]["content"]
 
 
 _CITE_RE = re.compile(r"\[([^\]@]+?)\s*@\s*(\d+):(\d{2})(?::(\d{2}))?\]")
