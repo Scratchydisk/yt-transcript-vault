@@ -378,6 +378,37 @@ def _ollama_chat(messages: list[dict], settings: dict) -> str:
     return resp.json()["message"]["content"]
 
 
+def _ollama_chat_stream(messages: list[dict], settings: dict):
+    # Native /api/chat streams NDJSON and honours options/think, unlike the /v1
+    # OpenAI-compatible endpoint. See _ollama_chat for the /v1-base derivation.
+    import requests
+    base = settings["api_base_url"].rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-len("/v1")]
+    payload = {"model": settings["chat_model"], "messages": messages, "stream": True}
+    num_ctx = settings.get("num_ctx") or 0
+    if num_ctx:
+        payload["options"] = {"num_ctx": int(num_ctx)}
+    if settings.get("think"):
+        payload["think"] = True
+    headers = {"Authorization": f"Bearer {settings['api_key']}"} \
+        if settings.get("api_key") else {}
+    resp = requests.post(base.rstrip("/") + "/api/chat", headers=headers,
+                         json=payload, stream=True, timeout=120)
+    resp.raise_for_status()
+    for raw in resp.iter_lines(decode_unicode=True):
+        if not raw:
+            continue
+        try:
+            msg = json.loads(raw).get("message") or {}
+        except ValueError:
+            continue
+        if msg.get("thinking"):
+            yield "thinking", msg["thinking"]
+        if msg.get("content"):
+            yield "content", msg["content"]
+
+
 _CITE_RE = re.compile(r"\[([^\]@]+?)\s*@\s*(\d+):(\d{2})(?::(\d{2}))?\]")
 
 

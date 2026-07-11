@@ -400,3 +400,50 @@ def test_default_chat_stream_parses_sse(monkeypatch):
     assert captured["json"]["stream"] is True
     assert captured["stream"] is True
     assert captured["headers"] == {"Authorization": "Bearer k"}
+
+
+def _fake_requests_capturing(monkeypatch, lines):
+    import sys, types
+
+    class FakeResp:
+        def raise_for_status(self): pass
+        def iter_lines(self, decode_unicode=False):
+            return iter(lines)
+
+    captured = {}
+
+    def fake_post(url, **kw):
+        captured.update(url=url, json=kw.get("json"), headers=kw.get("headers"))
+        return FakeResp()
+
+    fake = types.ModuleType("requests"); fake.post = fake_post
+    monkeypatch.setitem(sys.modules, "requests", fake)
+    return captured
+
+
+def test_ollama_chat_stream_flags_and_parsing(monkeypatch):
+    captured = _fake_requests_capturing(monkeypatch, [
+        '{"message":{"thinking":"reason"}}',
+        '{"message":{"content":"Answer"}}',
+        '{"message":{},"done":true}',
+    ])
+    s = {"api_base_url": "http://localhost:11434/v1", "api_key": "", "chat_model": "m",
+         "num_ctx": 4096, "think": True}
+    events = list(library._ollama_chat_stream([{"role": "user", "content": "hi"}], s))
+    assert events == [("thinking", "reason"), ("content", "Answer")]
+    assert captured["url"] == "http://localhost:11434/api/chat"
+    assert captured["json"]["stream"] is True
+    assert captured["json"]["think"] is True
+    assert captured["json"]["options"] == {"num_ctx": 4096}
+    assert captured["headers"] == {}                       # no key → no auth header
+
+
+def test_ollama_chat_stream_omits_think_and_options_by_default(monkeypatch):
+    captured = _fake_requests_capturing(monkeypatch, ['{"message":{"content":"Hi"}}'])
+    s = {"api_base_url": "http://localhost:11434/v1", "api_key": "sk", "chat_model": "m",
+         "num_ctx": 0, "think": False}
+    events = list(library._ollama_chat_stream([{"role": "user", "content": "hi"}], s))
+    assert events == [("content", "Hi")]
+    assert "think" not in captured["json"]
+    assert "options" not in captured["json"]
+    assert captured["headers"] == {"Authorization": "Bearer sk"}  # key present → header
