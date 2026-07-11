@@ -561,3 +561,40 @@ def test_do_fetch_reports_title(tmp_path, monkeypatch):
     msg, table, stats, rows = app.do_fetch("https://youtu.be/aaaaaaaaaaa")
     assert "My Great Video" in msg
     assert any(r["title"] == "My Great Video" for r in rows)
+
+
+# Transfer: export / import
+import transfer
+import zipfile
+
+
+def test_export_zip_includes_transcripts_excludes_config_by_default(tmp_path):
+    root = tmp_path / "data"
+    _write_video(root, "Dark Finance", "Money Talk", "aaaaaaaaaaa",
+                 [{"text": "hi", "start": 0.0, "duration": 1.0}])
+    # Give it a sibling .md so we can assert both are bundled.
+    (root / "dark-finance" / "money-talk.md").write_text("# md", encoding="utf-8")
+    cfg = tmp_path / "config.json"
+    cfg.write_text('{"api_key": "secret"}', encoding="utf-8")
+
+    dest = tmp_path / "out.zip"
+    result = transfer.export_zip(root, dest, include_config=False, config_path=cfg)
+
+    assert result == dest
+    names = set(zipfile.ZipFile(dest).namelist())
+    assert "dark-finance/money-talk.json" in names
+    assert "dark-finance/money-talk.md" in names
+    assert "config.json" not in names            # excluded by default → no key leak
+
+
+def test_export_zip_includes_config_when_asked(tmp_path):
+    root = tmp_path / "data"
+    _write_video(root, "Chan A", "Vid", "aaaaaaaaaaa",
+                 [{"text": "hi", "start": 0.0, "duration": 1.0}])
+    cfg = tmp_path / "config.json"
+    cfg.write_text('{"api_key": "secret"}', encoding="utf-8")
+
+    dest = tmp_path / "out.zip"
+    transfer.export_zip(root, dest, include_config=True, config_path=cfg)
+    names = set(zipfile.ZipFile(dest).namelist())
+    assert "config.json" in names
