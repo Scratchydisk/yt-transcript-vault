@@ -332,7 +332,7 @@ def _default_chat_stream(messages: list[dict], settings: dict):
         stream=True,
         timeout=120,
     )
-    resp.raise_for_status()
+    _raise_for_status_with_body(resp)
     for raw in resp.iter_lines(decode_unicode=True):
         if not raw or not raw.startswith("data:"):
             continue
@@ -350,6 +350,64 @@ def _default_chat_stream(messages: list[dict], settings: dict):
         content = delta.get("content")
         if content:
             yield "content", content
+
+
+def _raise_for_status_with_body(resp) -> None:
+    """Like resp.raise_for_status(), but surface the server's response body in
+    the error. OpenAI-compatible and Ollama endpoints explain 4xx/5xx failures
+    in the body (e.g. Ollama's `"<model>" does not support thinking`), which the
+    bare requests HTTPError drops — leaving the user with an opaque 400."""
+    if resp.status_code >= 400:
+        detail = (resp.text or "").strip()
+        raise RuntimeError(f"HTTP {resp.status_code} from {resp.url}"
+                           + (f": {detail}" if detail else ""))
+
+
+def _ollama_base(settings: dict) -> str:
+    """Ollama native-API host root, derived from the stored /v1 base (which is
+    used for embeddings + model discovery)."""
+    base = settings["api_base_url"].rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-len("/v1")]
+    return base.rstrip("/")
+
+
+def _ollama_headers(settings: dict) -> dict:
+    # Ollama needs no auth; forward a key only if one is set (e.g. behind a proxy).
+    return {"Authorization": f"Bearer {settings['api_key']}"} \
+        if settings.get("api_key") else {}
+
+
+_OLLAMA_CAPS_CACHE: dict[tuple[str, str], list[str]] = {}
+
+
+def _ollama_capabilities(settings: dict) -> list[str]:
+    """Model capabilities reported by Ollama's /api/show (e.g. 'thinking',
+    'tools', 'completion'), cached per (host, model). Returns [] if they can't
+    be determined — /api/show shares the host with /api/chat, so a failure here
+    means that call will fail too and surface its own error."""
+    key = (_ollama_base(settings), settings.get("chat_model", ""))
+    cached = _OLLAMA_CAPS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    import requests
+    caps: list[str] = []
+    try:
+        resp = requests.post(key[0] + "/api/show", headers=_ollama_headers(settings),
+                             json={"model": key[1]}, timeout=20)
+        if resp.status_code < 400:
+            caps = resp.json().get("capabilities") or []
+    except (requests.RequestException, ValueError):
+        caps = []
+    if caps:                       # don't cache transient/empty failures
+        _OLLAMA_CAPS_CACHE[key] = caps
+    return caps
+
+
+def _ollama_supports_thinking(settings: dict) -> bool:
+    # Ollama's /api/chat returns 400 if `think` is sent to a model lacking the
+    # 'thinking' capability, so callers degrade to a non-thinking request.
+    return "thinking" in _ollama_capabilities(settings)
 
 
 def _ollama_chat(messages: list[dict], settings: dict) -> str:
@@ -383,20 +441,19 @@ def _ollama_chat_stream(messages: list[dict], settings: dict):
     # Native /api/chat streams NDJSON and honours options/think, unlike the /v1
     # OpenAI-compatible endpoint. See _ollama_chat for the /v1-base derivation.
     import requests
-    base = settings["api_base_url"].rstrip("/")
-    if base.endswith("/v1"):
-        base = base[:-len("/v1")]
     payload = {"model": settings["chat_model"], "messages": messages, "stream": True}
     num_ctx = settings.get("num_ctx") or 0
     if num_ctx:
         payload["options"] = {"num_ctx": int(num_ctx)}
-    if settings.get("think"):
+    # Only request thinking when the model supports it — Ollama 400s otherwise.
+    # For a reasoning model that lacks the capability, its reasoning still
+    # arrives inline in the content.
+    if settings.get("think") and _ollama_supports_thinking(settings):
         payload["think"] = True
-    headers = {"Authorization": f"Bearer {settings['api_key']}"} \
-        if settings.get("api_key") else {}
-    resp = requests.post(base.rstrip("/") + "/api/chat", headers=headers,
+    resp = requests.post(_ollama_base(settings) + "/api/chat",
+                         headers=_ollama_headers(settings),
                          json=payload, stream=True, timeout=120)
-    resp.raise_for_status()
+    _raise_for_status_with_body(resp)
     for raw in resp.iter_lines(decode_unicode=True):
         if not raw:
             continue
