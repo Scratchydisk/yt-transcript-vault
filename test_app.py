@@ -623,3 +623,59 @@ def test_inspect_zip_lists_entries_and_flags_duplicates(tmp_path):
     assert by_arc["chan-b/beta.json"]["title"] == "Beta"
     assert by_arc["chan-b/beta.json"]["channel_slug"] == "chan-b"
     assert by_arc["chan-b/beta.json"]["md_arcname"] is None  # _write_video writes no .md
+
+
+def test_resolve_selection_unions_channels_and_videos_excluding_dupes():
+    entries = [
+        {"channel_slug": "chan-a", "json_arcname": "chan-a/alpha.json", "duplicate": False},
+        {"channel_slug": "chan-a", "json_arcname": "chan-a/gamma.json", "duplicate": True},
+        {"channel_slug": "chan-b", "json_arcname": "chan-b/beta.json", "duplicate": False},
+    ]
+    # Whole channel A (skips the duplicate gamma) + explicit beta video.
+    out = transfer.resolve_selection(entries, ["chan-a"], ["chan-b/beta.json"])
+    assert out == ["chan-a/alpha.json", "chan-b/beta.json"]
+
+
+def test_import_selected_extracts_new_skips_existing(tmp_path):
+    src = tmp_path / "src"
+    _write_video(src, "Chan A", "Alpha", "aaaaaaaaaaa",
+                 [{"text": "hi", "start": 0.0, "duration": 1.0}])
+    (src / "chan-a" / "alpha.md").write_text("# alpha", encoding="utf-8")
+    _write_video(src, "Chan B", "Beta", "bbbbbbbbbbb",
+                 [{"text": "yo", "start": 0.0, "duration": 1.0}])
+    zip_path = tmp_path / "exp.zip"
+    transfer.export_zip(src, zip_path)
+
+    local = tmp_path / "local"
+    # Pre-existing Alpha → must be skipped, not overwritten.
+    _write_video(local, "Chan A", "Alpha", "aaaaaaaaaaa",
+                 [{"text": "ORIGINAL", "start": 0.0, "duration": 1.0}])
+
+    result = transfer.import_selected(
+        zip_path, local, ["chan-a/alpha.json", "chan-b/beta.json"])
+
+    assert result["imported"] == 1
+    assert result["skipped"] == 1
+    assert result["errors"] == []
+    # Beta imported with its (absent) md → json present, no md written.
+    assert (local / "chan-b" / "beta.json").exists()
+    # Alpha untouched (still ORIGINAL) and its md NOT overwritten.
+    assert "ORIGINAL" in (local / "chan-a" / "alpha.json").read_text(encoding="utf-8")
+
+
+def test_import_selected_rejects_zip_slip(tmp_path):
+    # Craft a malicious zip with a traversal path.
+    zip_path = tmp_path / "evil.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("../escape.json", '{"title": "x"}')
+        zf.writestr("chan-a/ok.json", '{"title": "ok"}')
+    local = tmp_path / "local"
+    local.mkdir()
+
+    result = transfer.import_selected(
+        zip_path, local, ["../escape.json", "chan-a/ok.json"])
+
+    assert result["imported"] == 1                       # only the safe one
+    assert any("escape" in e for e in result["errors"])  # traversal rejected
+    assert not (tmp_path / "escape.json").exists()        # nothing escaped root
+    assert (local / "chan-a" / "ok.json").exists()

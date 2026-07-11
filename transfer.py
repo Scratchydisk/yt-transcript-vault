@@ -57,3 +57,57 @@ def inspect_zip(zip_path: Path, root: Path) -> list[dict]:
                 "duplicate": (root / channel_slug / f"{stem}.json").exists(),
             })
     return entries
+
+
+def resolve_selection(entries: list[dict], selected_channels: list[str],
+                      selected_videos: list[str]) -> list[str]:
+    """Union of ticked videos and all new videos under ticked channels (deduped)."""
+    wanted: list[str] = []
+    seen: set[str] = set()
+    channel_set = set(selected_channels)
+    for e in entries:
+        if e["channel_slug"] in channel_set and not e["duplicate"]:
+            arc = e["json_arcname"]
+            if arc not in seen:
+                seen.add(arc); wanted.append(arc)
+    for arc in selected_videos:
+        if arc not in seen:
+            seen.add(arc); wanted.append(arc)
+    return wanted
+
+
+def _is_safe_arcname(name: str) -> bool:
+    """channel/name.json with no traversal or absolute path — for untrusted zips."""
+    if not _ENTRY_RE.match(name):
+        return False
+    p = Path(name)
+    return not p.is_absolute() and ".." not in p.parts
+
+
+def import_selected(zip_path: Path, root: Path,
+                    selected_arcnames: list[str]) -> dict:
+    """Extract selected json + .md siblings into root, skipping existing files.
+
+    Untrusted input: any unsafe arcname (traversal/absolute/malformed) is rejected
+    into errors and never written. Existing destinations are skipped, not overwritten.
+    """
+    root = Path(root)
+    imported = skipped = 0
+    errors: list[str] = []
+    with zipfile.ZipFile(zip_path) as zf:
+        names = set(zf.namelist())
+        for arc in selected_arcnames:
+            if not _is_safe_arcname(arc):
+                errors.append(f"Rejected unsafe path: {arc}")
+                continue
+            dest_json = root / arc
+            if dest_json.exists():
+                skipped += 1
+                continue
+            dest_json.parent.mkdir(parents=True, exist_ok=True)
+            dest_json.write_bytes(zf.read(arc))
+            md_arc = arc[:-len(".json")] + ".md"
+            if md_arc in names:
+                (root / md_arc).write_bytes(zf.read(md_arc))
+            imported += 1
+    return {"imported": imported, "skipped": skipped, "errors": errors}
