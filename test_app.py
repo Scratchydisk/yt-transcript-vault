@@ -367,3 +367,36 @@ def test_chat_stream_requires_config(tmp_path):
 
 def test_default_settings_has_think_off():
     assert library.DEFAULT_SETTINGS["think"] is False
+
+
+def test_default_chat_stream_parses_sse(monkeypatch):
+    import sys, types
+
+    class FakeResp:
+        def raise_for_status(self): pass
+        def iter_lines(self, decode_unicode=False):
+            return iter([
+                'data: {"choices":[{"delta":{"reasoning_content":"hmm"}}]}',
+                '',
+                'data: {"choices":[{"delta":{"content":"Hi"}}]}',
+                'data: [DONE]',
+                'data: {"choices":[{"delta":{"content":"IGNORED"}}]}',
+            ])
+
+    captured = {}
+
+    def fake_post(url, **kw):
+        captured.update(url=url, json=kw.get("json"), stream=kw.get("stream"),
+                        headers=kw.get("headers"))
+        return FakeResp()
+
+    fake = types.ModuleType("requests"); fake.post = fake_post
+    monkeypatch.setitem(sys.modules, "requests", fake)
+
+    s = {"api_base_url": "http://x/v1", "api_key": "k", "chat_model": "m"}
+    events = list(library._default_chat_stream([{"role": "user", "content": "hi"}], s))
+    assert events == [("thinking", "hmm"), ("content", "Hi")]
+    assert captured["url"] == "http://x/v1/chat/completions"
+    assert captured["json"]["stream"] is True
+    assert captured["stream"] is True
+    assert captured["headers"] == {"Authorization": "Bearer k"}

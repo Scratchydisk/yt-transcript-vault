@@ -322,6 +322,35 @@ def _default_chat(messages: list[dict], settings: dict) -> str:
     return resp.json()["choices"][0]["message"]["content"]
 
 
+def _default_chat_stream(messages: list[dict], settings: dict):
+    import requests
+    payload = {"model": settings["chat_model"], "messages": messages, "stream": True}
+    resp = requests.post(
+        settings["api_base_url"].rstrip("/") + "/chat/completions",
+        headers={"Authorization": f"Bearer {settings['api_key']}"},
+        json=payload,
+        stream=True,
+        timeout=120,
+    )
+    resp.raise_for_status()
+    for raw in resp.iter_lines(decode_unicode=True):
+        if not raw or not raw.startswith("data:"):
+            continue
+        data = raw[len("data:"):].strip()
+        if data == "[DONE]":
+            break
+        try:
+            delta = json.loads(data)["choices"][0]["delta"]
+        except (ValueError, KeyError, IndexError):
+            continue
+        reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+        if reasoning:
+            yield "thinking", reasoning
+        content = delta.get("content")
+        if content:
+            yield "content", content
+
+
 def _ollama_chat(messages: list[dict], settings: dict) -> str:
     # Ollama's OpenAI-compatible /v1 endpoint silently drops `options` (so
     # num_ctx never takes effect there). Its native /api/chat honours them, so
