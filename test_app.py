@@ -393,13 +393,36 @@ def test_default_chat_stream_parses_sse(monkeypatch):
     fake = types.ModuleType("requests"); fake.post = fake_post
     monkeypatch.setitem(sys.modules, "requests", fake)
 
-    s = {"api_base_url": "http://x/v1", "api_key": "k", "chat_model": "m"}
+    s = {"api_base_url": "http://x/v1", "api_key": "k", "chat_model": "m", "think": True}
     events = list(library._default_chat_stream([{"role": "user", "content": "hi"}], s))
     assert events == [("thinking", "hmm"), ("content", "Hi")]
     assert captured["url"] == "http://x/v1/chat/completions"
     assert captured["json"]["stream"] is True
     assert captured["stream"] is True
     assert captured["headers"] == {"Authorization": "Bearer k"}
+
+
+def test_default_chat_stream_suppresses_reasoning_when_think_off(monkeypatch):
+    import sys, types
+
+    class FakeResp:
+        def raise_for_status(self): pass
+        def iter_lines(self, decode_unicode=False):
+            return iter([
+                'data: {"choices":[{"delta":{"reasoning_content":"hmm"}}]}',
+                'data: {"choices":[{"delta":{"content":"Hi"}}]}',
+                'data: [DONE]',
+            ])
+
+    def fake_post(url, **kw):
+        return FakeResp()
+
+    fake = types.ModuleType("requests"); fake.post = fake_post
+    monkeypatch.setitem(sys.modules, "requests", fake)
+
+    s = {"api_base_url": "http://x/v1", "api_key": "k", "chat_model": "m"}  # no think
+    events = list(library._default_chat_stream([{"role": "user", "content": "hi"}], s))
+    assert events == [("content", "Hi")]
 
 
 def _fake_requests_capturing(monkeypatch, lines):

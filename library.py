@@ -343,7 +343,8 @@ def _default_chat_stream(messages: list[dict], settings: dict):
             delta = json.loads(data)["choices"][0]["delta"]
         except (ValueError, KeyError, IndexError):
             continue
-        reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+        reasoning = (delta.get("reasoning_content") or delta.get("reasoning")) \
+            if settings.get("think") else None
         if reasoning:
             yield "thinking", reasoning
         content = delta.get("content")
