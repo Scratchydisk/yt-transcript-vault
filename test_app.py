@@ -539,3 +539,25 @@ def test_render_chat_details_open_until_answer():
     assert "<details>" in with_answer and "<details open>" not in with_answer
     assert "the answer" in with_answer
     assert app.render_chat("", "just answer") == "just answer"
+
+
+def test_url_textbox_submits_on_enter():
+    # Regression: pressing Enter in the "Add a video" box must trigger a fetch,
+    # not silently do nothing. Verify a submit-style dependency targets do_fetch.
+    triggers = [d for d in app.demo.fns.values()
+                if getattr(d, "fn", None) is app.do_fetch]
+    # do_fetch must be wired at least twice: the Fetch button click AND url_in.submit.
+    assert len(triggers) >= 2
+
+
+def test_do_fetch_reports_title(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "ROOT", tmp_path)
+
+    def fake_transcribe(url, langs, root):
+        _write_video(root, "Chan A", "My Great Video", "aaaaaaaaaaa",
+                     [{"text": "hi", "start": 0.0, "duration": 1.0}])
+
+    monkeypatch.setattr(app, "transcribe", fake_transcribe)
+    msg, table, stats, rows = app.do_fetch("https://youtu.be/aaaaaaaaaaa")
+    assert "My Great Video" in msg
+    assert any(r["title"] == "My Great Video" for r in rows)

@@ -10,7 +10,7 @@ from pathlib import Path
 import gradio as gr
 
 import library
-from transcribe import default_data_dir, transcribe
+from transcribe import default_data_dir, extract_video_id, transcribe
 
 ROOT = default_data_dir()
 
@@ -129,7 +129,10 @@ def do_fetch(url: str, progress=gr.Progress()):
         progress(0.3, desc="Fetching transcript…")
         transcribe(url, ["en"], ROOT)
         rows, table, stats = load_library()
-        return "Fetched.", table, stats, rows
+        vid = extract_video_id(url) if url.strip() else ""
+        match = next((r for r in rows if r["video_id"] == vid), None)
+        msg = f"Fetched: {match['title']}" if match else "Fetched."
+        return msg, table, stats, rows
     except Exception as exc:  # noqa: BLE001 — surface any fetch failure to the UI
         rows, table, stats = load_library()
         return f"Error: {exc}", table, stats, rows
@@ -283,6 +286,9 @@ with gr.Blocks(title="Transcript Library") as demo:
     demo.load(None, None, None, js=SEEK_JS)
     demo.load(load_library, outputs=[visible_state, table, stats_md])
     fetch_btn.click(do_fetch, [url_in], [fetch_msg, table, stats_md, visible_state])
+    # Enter in the URL box must fetch too — the Search box below submits on Enter,
+    # so users habitually press Enter here; without this the table "won't refresh".
+    url_in.submit(do_fetch, [url_in], [fetch_msg, table, stats_md, visible_state])
     search_in.submit(do_search, [search_in, mode], [table, search_note, visible_state])
     mode.change(do_search, [search_in, mode], [table, search_note, visible_state])
     table.select(on_row_select, [visible_state, search_in],
