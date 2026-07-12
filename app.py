@@ -240,7 +240,10 @@ def do_inspect_zip(file):
         return (gr.update(choices=[]), gr.update(choices=[]), "",
                 gr.update(visible=False))
     try:
-        entries = transfer.inspect_zip(Path(file.name), ROOT)
+        # Gradio passes file as a dict with 'name' key, or a FileData object
+        file_path = file.get("name") if isinstance(file, dict) else (
+            file.name if hasattr(file, "name") else file.path if hasattr(file, "path") else str(file))
+        entries = transfer.inspect_zip(Path(file_path), ROOT)
         channels = sorted(set(e["channel_slug"] for e in entries
                             if not e["duplicate"]))
         video_choices = [(f"{e['channel_slug']} — {e['title']}",
@@ -264,14 +267,17 @@ def do_import_selected(file, selected_channels, selected_videos,
         return "No file selected.", table, stats, rows
     try:
         progress(0.2, desc="Inspecting archive…")
-        entries = transfer.inspect_zip(Path(file.name), ROOT)
+        # Gradio passes file as a dict with 'name' key, or a FileData object
+        file_path = file.get("name") if isinstance(file, dict) else (
+            file.name if hasattr(file, "name") else file.path if hasattr(file, "path") else str(file))
+        entries = transfer.inspect_zip(Path(file_path), ROOT)
         to_import = list(selected_videos or [])
         for e in entries:
             if (not e["duplicate"] and e["channel_slug"] in (selected_channels or [])
                     and e["json_arcname"] not in to_import):
                 to_import.append(e["json_arcname"])
         progress(0.5, desc="Importing…")
-        result = transfer.import_selected(Path(file.name), ROOT, to_import)
+        result = transfer.import_selected(Path(file_path), ROOT, to_import)
         rows, table, stats = load_library()
         msg = f"Imported {result['imported']}, skipped {result['skipped']}"
         if result["errors"]:
