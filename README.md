@@ -40,6 +40,9 @@ Requires Python **3.10–3.14** (`youtube-transcript-api` needs `<3.15`).
 - **Chat** — retrieves the most relevant chunks and answers via an
   OpenAI-compatible endpoint, citing sources as `[title @ mm:ss]`. Each citation
   is a clickable link that opens the video at that timestamp in a new tab.
+- **Transfer** — export your entire library as a portable zip (optionally with
+  settings), or selectively import videos from another user's export. Perfect for
+  moving your vault between PCs or sharing curated collections.
 
 ## Where transcripts are stored
 
@@ -56,6 +59,18 @@ Override with the `YT_TRANSCRIBE_DIR` environment variable. Layout:
 <data-dir>/<channel-slug>/<video-title>.json   # metadata + timed snippets
 <data-dir>/<channel-slug>/<video-title>.md      # metadata header + paragraphed transcript
 ```
+
+## Transfer & Backup
+
+The **Transfer** tab (in the web UI) lets you export and import your library:
+
+**Export.** Click "Export library" to download a zip of all your transcripts. You
+can optionally include `config.json` (API keys, model settings) — off by default
+so shared zips don't leak credentials.
+
+**Import.** Upload a zip from another user's export. The UI shows which videos are
+new vs. already in your library, and you can selectively import by channel or
+individual video. Existing videos are skipped (no overwrite).
 
 ## Configuration
 
