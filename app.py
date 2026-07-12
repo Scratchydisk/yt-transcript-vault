@@ -5,11 +5,13 @@ Business logic lives in library.py; this file is wiring only.
 from __future__ import annotations
 
 import html
+import tempfile
 from pathlib import Path
 
 import gradio as gr
 
 import library
+import transfer
 from transcribe import default_data_dir, extract_video_id, transcribe
 
 ROOT = default_data_dir()
@@ -200,6 +202,64 @@ def discover_models_ui(base, key):
     return gr.update(choices=emb), gr.update(choices=chat), note
 
 
+def build_export(include_config: bool):
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+        config_path = library.settings_path() if include_config else None
+        dest = transfer.export_zip(ROOT, tmp_path, include_config, config_path)
+        return gr.update(value=str(dest), visible=True), "Export ready"
+    except Exception as exc:  # noqa: BLE001
+        return gr.update(visible=False), f"Export failed: {exc}"
+
+
+def do_inspect_zip(file):
+    if not file:
+        return (gr.update(choices=[]), gr.update(choices=[]), "",
+                gr.update(visible=False))
+    try:
+        entries = transfer.inspect_zip(Path(file.name), ROOT)
+        channels = sorted(set(e["channel_slug"] for e in entries
+                            if not e["duplicate"]))
+        video_choices = [(f"{e['channel_slug']} — {e['title']}",
+                         e["json_arcname"])
+                        for e in entries if not e["duplicate"]]
+        new_count = sum(1 for e in entries if not e["duplicate"])
+        dup_count = sum(1 for e in entries if e["duplicate"])
+        status = (f"{new_count} new, {dup_count} already in your library "
+                 f"(will be skipped).")
+        return (gr.update(choices=channels), gr.update(choices=video_choices),
+                status, gr.update(visible=True))
+    except Exception as exc:  # noqa: BLE001
+        return (gr.update(choices=[]), gr.update(choices=[]),
+                f"Inspection failed: {exc}", gr.update(visible=False))
+
+
+def do_import_selected(file, selected_channels, selected_videos,
+                       progress=gr.Progress()):
+    if not file:
+        rows, table, stats = load_library()
+        return "No file selected.", table, stats, rows
+    try:
+        progress(0.2, desc="Inspecting archive…")
+        entries = transfer.inspect_zip(Path(file.name), ROOT)
+        to_import = list(selected_videos or [])
+        for e in entries:
+            if (not e["duplicate"] and e["channel_slug"] in (selected_channels or [])
+                    and e["json_arcname"] not in to_import):
+                to_import.append(e["json_arcname"])
+        progress(0.5, desc="Importing…")
+        result = transfer.import_selected(Path(file.name), ROOT, to_import)
+        rows, table, stats = load_library()
+        msg = f"Imported {result['imported']}, skipped {result['skipped']}"
+        if result["errors"]:
+            msg += f". Errors: {'; '.join(result['errors'])}"
+        return msg, table, stats, rows
+    except Exception as exc:  # noqa: BLE001
+        rows, table, stats = load_library()
+        return f"Import failed: {exc}", table, stats, rows
+
+
 # Compact the library/search table so all columns fit the narrow left panel
 # instead of scrolling off — smaller font, tighter cell padding.
 TABLE_CSS = """
@@ -279,6 +339,26 @@ with gr.Blocks(title="Transcript Library") as demo:
                          "the server emits it. Only affects models that support it.")
                 save_btn = gr.Button("Save settings", variant="primary")
                 save_msg = gr.Markdown("")
+            with gr.Tab("Transfer"):
+                gr.Markdown("### Export")
+                export_btn = gr.Button("Export library", variant="primary")
+                with gr.Group(visible=False) as export_panel:
+                    include_config = gr.Checkbox(
+                        label="Include config.json (contains API keys)",
+                        value=False)
+                    build_btn = gr.Button("Build download")
+                    export_file = gr.File(label="Download", visible=False)
+                    export_msg = gr.Markdown("")
+                gr.Markdown("### Import")
+                import_file = gr.File(label="Upload zip", file_types=[".zip"])
+                import_status = gr.Markdown("")
+                with gr.Group(visible=False) as import_panel:
+                    import_channels = gr.CheckboxGroup(
+                        label="Channels", choices=[])
+                    import_videos = gr.CheckboxGroup(
+                        label="Videos", choices=[])
+                    import_btn = gr.Button("Import selected", variant="primary")
+                    import_msg = gr.Markdown("")
 
     # Two separate load handlers: one pure-JS to define window.ytSeek on the
     # client (executes; a <script> in gr.HTML would not), one for the data.
@@ -299,6 +379,14 @@ with gr.Blocks(title="Transcript Library") as demo:
     save_btn.click(save_settings_ui,
                    [prov, emodel, api_type, base, key, cmodel, num_ctx, think_cb],
                    [save_msg])
+    export_btn.click(lambda: gr.update(visible=True), None, [export_panel])
+    build_btn.click(build_export, [include_config],
+                    [export_file, export_msg])
+    import_file.change(do_inspect_zip, [import_file],
+                       [import_channels, import_videos, import_status, import_panel])
+    import_btn.click(do_import_selected,
+                     [import_file, import_channels, import_videos],
+                     [import_msg, table, stats_md, visible_state])
 
 if __name__ == "__main__":
     demo.launch(server_name="127.0.0.1", inbrowser=True, css=TABLE_CSS)
