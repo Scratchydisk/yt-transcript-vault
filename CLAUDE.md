@@ -22,9 +22,13 @@ player, and chatting with the transcripts via an OpenAI-compatible LLM.
 # Run Python entry points directly (equivalent)
 venv/bin/python app.py                                          # web UI
 venv/bin/python transcribe.py "<url>"                           # CLI transcriber
+
+# Tests (pytest is not in requirements.txt: venv/bin/pip install pytest)
+venv/bin/python -m pytest
+venv/bin/python -m pytest -k notes                              # single area
 ```
 
-There is no test suite or linter configured.
+Tests live in `test_app.py` (pytest, `tmp_path`-based, no network). No linter is configured.
 
 ## Output layout
 
@@ -36,8 +40,10 @@ By default, transcripts are stored in the platform-specific user data directory 
 
 Structure:
 ```
-<data-dir>/<channel-slug>/<video-title>.json   # metadata + raw timed snippets
-<data-dir>/<channel-slug>/<video-title>.md      # metadata header + transcript grouped into paragraphs
+<data-dir>/<channel-slug>/<video-title>.json      # metadata + raw timed snippets
+<data-dir>/<channel-slug>/<video-title>.md         # metadata header + transcript grouped into paragraphs
+<data-dir>/<channel-slug>/<video-title>.notes.md   # user notes (optional; included in search + chat)
+<data-dir>/<channel-slug>/<video-title>.chat.md    # exported chat Q&As (optional; NOT searched)
 ```
 
 - Channel folder is slugified (`"Dark Finance"` → `dark-finance`).
@@ -69,8 +75,10 @@ mv transcripts/* "$(venv/bin/python -c 'import transcribe; print(transcribe.defa
   - **Settings** (`config.json`): API endpoints, model names, user preferences. Saved with `0600` mode, sensitive keys are masked in UI output.
 
 - **`app.py`**: Gradio web UI. Runs on 127.0.0.1 (localhost, no share), opens browser.
-  - **Layout**: left panel = "Add a video" box + a single search box with a Keyword/Semantic mode toggle (radio) over a results/library table; right panel = tabs **Viewer / Markdown / Chat / Settings**.
-  - **Player**: YouTube iframe (`enablejsapi=1`); the `ytSeek(seconds)` JS is defined once via `demo.load(js=...)` and each `[m:ss]` transcript stamp calls it via `postMessage` (seeking the currently-loaded video). Selecting a search hit loads that video — including a different one — and seeks to the hit timestamp.
+  - **Layout**: left panel = "Add a video" box + a single search box with a Keyword/Semantic mode toggle (radio) over a results/library table; right panel = tabs **Viewer / Markdown / Notes / Chat / Settings / Transfer**.
+  - **Player**: YouTube iframe (`enablejsapi=1`); the `ytSeek(seconds)` JS is defined once via `demo.load(js=...)` and each `[m:ss]` transcript stamp calls it via `postMessage` (seeking the currently-loaded video). Selecting a search hit loads that video — including a different one — cued (not autoplaying) at the hit timestamp.
+  - **Notes**: per-video markdown saved to `<title>.notes.md`; included in keyword search (line hits, `[note]` prefix, 0:00) and in embeddings/chat (`notes_chunks`, cache invalidated by notes mtime + a chunk-count shape guard).
+  - **Chat export**: "Copy to clipboard" (client-side JS reading a hidden textbox that mirrors the raw Q&A markdown) and "Save with video" (appends to `<title>.chat.md`, `---`-separated; never searched — search/chat only read `.json` + `.notes.md`).
   - **Settings**: embedding provider (local/API), OpenAI-compatible base URL + API key (masked) + embedding/chat model names; API type (OpenAI/Ollama); num_ctx (Ollama); "Stream reasoning (think)" toggle; saved to `config.json`.
 
 ### Launchers

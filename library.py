@@ -54,6 +54,41 @@ def scan_library(root: Path) -> list[dict]:
     return rows
 
 
+def notes_path(json_path: str) -> Path:
+    return Path(json_path).with_suffix(".notes.md")
+
+
+def load_notes(json_path: str) -> str:
+    p = notes_path(json_path)
+    return p.read_text(encoding="utf-8") if p.exists() else ""
+
+
+def save_notes(json_path: str, text: str) -> None:
+    p = notes_path(json_path)
+    if text.strip():
+        p.write_text(text, encoding="utf-8")
+    elif p.exists():
+        p.unlink()  # empty notes = no file; embed_video's shape guard re-embeds
+
+
+def notes_chunks(json_path: str) -> list[dict]:
+    """User notes as searchable chunks (one per paragraph), start=0.0 since
+    notes have no timestamp. Prefixed so chat context shows their origin."""
+    text = load_notes(json_path)
+    return [{"text": f"[user note] {p.strip()}", "start": 0.0}
+            for p in re.split(r"\n\s*\n", text) if p.strip()]
+
+
+def export_chat(json_path: str, text: str) -> Path:
+    """Append a chat Q&A to <video>.chat.md. Excluded from search/chat, which
+    only read .json snippets and .notes.md."""
+    p = Path(json_path).with_suffix(".chat.md")
+    existing = p.read_text(encoding="utf-8") if p.exists() else ""
+    p.write_text(existing + ("\n---\n\n" if existing else "")
+                 + text.rstrip() + "\n", encoding="utf-8")
+    return p
+
+
 def keyword_search(root: Path, query: str, per_video_cap: int = 20,
                    total_cap: int = 200) -> tuple[list[dict], bool]:
     query = query.strip().lower()
@@ -64,7 +99,12 @@ def keyword_search(root: Path, query: str, per_video_cap: int = 20,
     for row in scan_library(root):
         data = load_transcript(row["json_path"])
         per_video = 0
-        for snip in data.get("snippets", []):
+        note_lines = [f"[note] {ln.strip()}"
+                      for ln in load_notes(row["json_path"]).splitlines()
+                      if ln.strip()]
+        snippets = data.get("snippets", []) \
+            + [{"text": ln, "start": 0.0} for ln in note_lines]
+        for snip in snippets:
             text = snip.get("text", "")
             if query in text.lower():
                 if per_video >= per_video_cap or len(hits) >= total_cap:
@@ -244,12 +284,19 @@ def discover_models(settings: dict) -> dict:
 
 def embed_video(json_path: str, settings: dict) -> tuple["np.ndarray", list[dict]]:
     data = load_transcript(json_path)
-    chunks = chunk_snippets(data.get("snippets", []))
+    chunks = chunk_snippets(data.get("snippets", [])) + notes_chunks(json_path)
     model_id = embedding_model_id(settings)
     cache = cache_path_for(json_path, model_id)
     src_mtime = Path(json_path).stat().st_mtime
+    nf = notes_path(json_path)
+    if nf.exists():
+        src_mtime = max(src_mtime, nf.stat().st_mtime)
     if cache.exists() and cache.stat().st_mtime >= src_mtime:
-        return np.load(cache), chunks
+        vectors = np.load(cache)
+        if vectors.shape[0] == len(chunks):
+            return vectors, chunks
+        # chunk count changed under a fresh-looking cache (e.g. notes file
+        # deleted) — fall through and re-embed
     if not chunks:
         vectors = np.zeros((0, 1), dtype="float32")
     else:

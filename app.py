@@ -63,10 +63,12 @@ def load_library():
 def _player_iframe(video_id: str, start: float) -> str:
     # ponytail: postMessage may no-op if clicked before the iframe's JS-API
     # handshake completes; fine for v1 — the stamp just needs a second click.
+    # No autoplay=1: the video loads cued at `start` and waits for the user;
+    # allow="autoplay" stays so ytSeek's playVideo command still works.
     return (f'<iframe id="yt-player" width="100%" height="360" frameborder="0" '
             f'allow="autoplay; encrypted-media" allowfullscreen '
             f'src="https://www.youtube.com/embed/{video_id}'
-            f'?enablejsapi=1&start={int(start)}&autoplay=1"></iframe>')
+            f'?enablejsapi=1&start={int(start)}"></iframe>')
 
 
 def _transcript_html(data: dict, highlight: str = "") -> str:
@@ -97,7 +99,7 @@ def show_video(json_path: str, seek: float = 0.0, highlight: str = ""):
             f"[Open on YouTube]({data['video_url']})")
     md = Path(json_path).with_suffix(".md")
     md_text = md.read_text(encoding="utf-8") if md.exists() else "_No .md file._"
-    return player, meta, md_text, json_path
+    return player, meta, md_text, library.load_notes(json_path), "", json_path
 
 
 def do_search(query: str, mode: str):
@@ -158,18 +160,37 @@ def render_chat(thinking: str, answer: str) -> str:
 def do_chat(query: str, scope: str, current_json: str):
     # Generator so the "Thinking…" state renders immediately, before the (slow)
     # retrieval + first token — otherwise the UI looks frozen until done.
-    yield "_Thinking…_"
+    # Second output is the raw export markdown (question + answer, no thinking)
+    # kept in a hidden textbox for the copy/save buttons.
+    yield "_Thinking…_", ""
     try:
         only = current_json if scope == "This video" and current_json else None
         streamed = False
+        answer = ""
         for thinking, answer in library.chat_stream(
                 query, ROOT, library.load_settings(), only_json=only):
             streamed = True
-            yield render_chat(thinking, answer)
+            yield render_chat(thinking, answer), f"## {query.strip()}\n\n{answer}"
         if not streamed:
-            yield "_(no response)_"
+            yield "_(no response)_", ""
     except Exception as exc:  # noqa: BLE001
-        yield f"Error: {exc}"
+        yield f"Error: {exc}", ""
+
+
+def save_chat_ui(export_text: str, json_path: str) -> str:
+    if not (export_text or "").strip():
+        return "Nothing to save — ask something first."
+    if not json_path:
+        return "Load a video first — the chat is saved next to it."
+    p = library.export_chat(json_path, export_text)
+    return f"Saved to `{p.name}`."
+
+
+def save_notes_ui(text: str, json_path: str) -> str:
+    if not json_path:
+        return "Load a video first."
+    library.save_notes(json_path, text)
+    return "Saved."
 
 
 def save_settings_ui(provider, model, api_type, base, key, chat_model, num_ctx, think):
@@ -293,12 +314,25 @@ with gr.Blocks(title="Transcript Library") as demo:
                 player_html = gr.HTML("")
             with gr.Tab("Markdown"):
                 md_view = gr.Markdown("")
+            with gr.Tab("Notes"):
+                notes_box = gr.Textbox(
+                    label="Notes (markdown — included in search and chat for "
+                          "this video)", lines=16)
+                notes_btn = gr.Button("Save notes", variant="primary")
+                notes_msg = gr.Markdown("")
             with gr.Tab("Chat"):
                 chat_scope = gr.Radio(["This video", "Whole library"],
                                       value="Whole library", label="Scope")
                 chat_in = gr.Textbox(label="Ask")
                 chat_btn = gr.Button("Send", variant="primary")
                 chat_out = gr.Markdown("", sanitize_html=False)
+                # Raw Q&A markdown for the buttons below; hidden textbox (not
+                # gr.State) because the client-side copy JS needs its value.
+                chat_export = gr.Textbox("", visible=False)
+                with gr.Row():
+                    copy_chat_btn = gr.Button("Copy to clipboard")
+                    save_chat_btn = gr.Button("Save with video")
+                chat_save_msg = gr.Markdown("")
             with gr.Tab("Settings"):
                 s = library.load_settings()
                 # Embedding source is independent of the chat API: "local" uses
@@ -372,8 +406,16 @@ with gr.Blocks(title="Transcript Library") as demo:
     search_in.submit(do_search, [search_in, mode], [table, search_note, visible_state])
     mode.change(do_search, [search_in, mode], [table, search_note, visible_state])
     table.select(on_row_select, [visible_state, search_in],
-                 [player_html, meta_md, md_view, current_json])
-    chat_btn.click(do_chat, [chat_in, chat_scope, current_json], [chat_out])
+                 [player_html, meta_md, md_view, notes_box, notes_msg,
+                  current_json])
+    notes_btn.click(save_notes_ui, [notes_box, current_json], [notes_msg])
+    chat_btn.click(do_chat, [chat_in, chat_scope, current_json],
+                   [chat_out, chat_export])
+    # Pure client-side: fn=None + js runs in the browser, where the clipboard is.
+    copy_chat_btn.click(None, [chat_export], None,
+                        js="(t) => { navigator.clipboard.writeText(t || ''); }")
+    save_chat_btn.click(save_chat_ui, [chat_export, current_json],
+                        [chat_save_msg])
     api_type.change(on_api_type_change, [api_type, base], [base])
     discover_btn.click(discover_models_ui, [base, key], [emodel, cmodel, discover_msg])
     save_btn.click(save_settings_ui,

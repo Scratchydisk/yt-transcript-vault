@@ -679,3 +679,59 @@ def test_import_selected_rejects_zip_slip(tmp_path):
     assert any("escape" in e for e in result["errors"])  # traversal rejected
     assert not (tmp_path / "escape.json").exists()        # nothing escaped root
     assert (local / "chan-a" / "ok.json").exists()
+
+
+# ---------- notes & chat export ----------
+
+def test_notes_roundtrip_and_keyword_search(tmp_path):
+    jp = _write_video(tmp_path, "Chan A", "Vid", "aaaaaaaaaaa",
+                      [{"text": "transcript line", "start": 0.0, "duration": 1.0}])
+    library.save_notes(str(jp), "remember the xylophone bit\n\nsecond para")
+    assert "xylophone" in library.load_notes(str(jp))
+
+    hits, _ = library.keyword_search(tmp_path, "xylophone")
+    assert len(hits) == 1
+    assert hits[0]["text"].startswith("[note]")
+    assert hits[0]["start"] == 0.0
+
+    # Empty notes removes the file and the search hits with it.
+    library.save_notes(str(jp), "   ")
+    assert not library.notes_path(str(jp)).exists()
+    assert library.keyword_search(tmp_path, "xylophone")[0] == []
+
+
+def test_notes_included_in_embedding_and_cache_refresh(tmp_path, monkeypatch):
+    jp = _write_video(tmp_path, "Chan A", "Vid", "aaaaaaaaaaa",
+                      [{"text": "transcript line", "start": 0.0, "duration": 1.0}])
+
+    def fake_embed(texts, settings):
+        return np.array([[1.0, 0.0]] * len(texts), dtype="float32")
+
+    monkeypatch.setattr(library, "_EMBED_FN", fake_embed)
+    settings = library.DEFAULT_SETTINGS.copy()
+
+    vectors, chunks = library.embed_video(str(jp), settings)
+    assert len(chunks) == 1
+
+    library.save_notes(str(jp), "my note about widgets")
+    vectors, chunks = library.embed_video(str(jp), settings)
+    assert len(chunks) == 2
+    assert chunks[-1]["text"] == "[user note] my note about widgets"
+    assert vectors.shape[0] == 2
+
+    # Deleting notes leaves a fresh-looking cache with the wrong shape;
+    # the shape guard must re-embed rather than return a mismatched cache.
+    library.save_notes(str(jp), "")
+    vectors, chunks = library.embed_video(str(jp), settings)
+    assert len(chunks) == 1
+    assert vectors.shape[0] == 1
+
+
+def test_export_chat_appends(tmp_path):
+    jp = _write_video(tmp_path, "Chan A", "Vid", "aaaaaaaaaaa",
+                      [{"text": "hi", "start": 0.0, "duration": 1.0}])
+    p = library.export_chat(str(jp), "## first question\n\nanswer one")
+    assert p == Path(str(jp)).with_suffix(".chat.md")
+    library.export_chat(str(jp), "## second question\n\nanswer two")
+    text = p.read_text(encoding="utf-8")
+    assert text.index("first question") < text.index("---") < text.index("second question")
