@@ -74,7 +74,7 @@ mv transcripts/* "$(venv/bin/python -c 'import transcribe; print(transcribe.defa
     collapsible block above the answer when the `think` setting is on.
   - **Settings** (`config.json`): API endpoints, model names, user preferences. Saved with `0600` mode, sensitive keys are masked in UI output.
 
-- **`app.py`**: Gradio web UI. Runs on 127.0.0.1 (localhost, no share), opens browser.
+- **`app.py`**: Gradio web UI. Runs on 127.0.0.1 (localhost, no share), opens browser. Set `YT_BIND=0.0.0.0` to serve a trusted LAN instead — that also suppresses `inbrowser`. Never `share=True` (public internet tunnel).
   - **Layout**: left panel = "Add a video" box + a single search box with a Keyword/Semantic mode toggle (radio) over a results/library table; right panel = tabs **Viewer / Markdown / Notes / Chat / Settings / Transfer**.
   - **Player**: YouTube iframe (`enablejsapi=1`); the `ytSeek(seconds)` JS is defined once via `demo.load(js=...)` and each `[m:ss]` transcript stamp calls it via `postMessage` (seeking the currently-loaded video). Selecting a search hit loads that video — including a different one — cued (not autoplaying) at the hit timestamp.
   - **Notes**: per-video markdown saved to `<title>.notes.md`; included in keyword search (line hits, `[note]` prefix, 0:00) and in embeddings/chat (`notes_chunks`, cache invalidated by notes mtime + a chunk-count shape guard).

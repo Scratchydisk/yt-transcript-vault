@@ -5,6 +5,7 @@ Business logic lives in library.py; this file is wiring only.
 from __future__ import annotations
 
 import html
+import os
 import tempfile
 from pathlib import Path
 
@@ -431,4 +432,10 @@ with gr.Blocks(title="Transcript Library") as demo:
                      [import_msg, table, stats_md, visible_state])
 
 if __name__ == "__main__":
-    demo.launch(server_name="127.0.0.1", inbrowser=True, css=TABLE_CSS)
+    # Localhost-only by default: a fresh clone must never expose transcripts or
+    # the API key to the network. Binding wider is an explicit opt-in via
+    # YT_BIND (e.g. YT_BIND=0.0.0.0 for a headless server on a trusted LAN),
+    # which also suppresses the browser launch there being no browser there.
+    # Note this is a LAN bind, not Gradio's share=True internet tunnel.
+    bind = os.environ.get("YT_BIND")
+    demo.launch(server_name=bind or "127.0.0.1", inbrowser=bind is None, css=TABLE_CSS)
