@@ -156,9 +156,15 @@ Transcripts move out of the repo into user space:
 - `./app.sh` (POSIX) and `app.bat` (Windows): create `venv/` and
   `pip install -r requirements.txt` if missing, then run `app.py`.
 - `app.py` launches Gradio with `inbrowser=True` → browser opens itself.
-- **Bind localhost only** (`server_name="127.0.0.1"`, no `share=True`,
-  no `0.0.0.0`) — this is a personal tool and must not expose transcripts or
-  the API key to the local network.
+- **Bind localhost by default** (`server_name="127.0.0.1"`) — a fresh clone is a
+  personal tool and must not expose transcripts or the API key to the network
+  without the user asking for it.
+- **Never `share=True`.** That is Gradio's public internet tunnel via
+  `gradio.live`, and nothing in this app should reach the open internet.
+- Binding wider is an explicit opt-in via the `YT_BIND` environment variable
+  (amended 2026-08-07): `YT_BIND=0.0.0.0` serves a headless deployment on a
+  trusted LAN, and suppresses `inbrowser` since such a host has no browser.
+  Unset means localhost, so the safe default survives.
 - Launchers must use the platform venv path: `venv/bin/…` on POSIX,
   `venv\Scripts\…` in `app.bat`.
 - Fresh-user path: clone → `./app.sh` → browser tab. No manual steps.

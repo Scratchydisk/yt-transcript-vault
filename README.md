@@ -29,6 +29,21 @@ venv/bin/python transcribe.py "<url>"
 
 Requires Python **3.10–3.14** (`youtube-transcript-api` needs `<3.15`).
 
+### Serving it on your network
+
+The UI binds `127.0.0.1` and opens a browser — it is a personal tool, and a
+fresh clone stays off the network. To run it headless on a machine you reach
+from elsewhere on a **trusted** LAN, set `YT_BIND`:
+
+```bash
+YT_BIND=0.0.0.0 venv/bin/python app.py    # serve the LAN; skips the browser launch
+```
+
+There is no authentication in front of the UI, so anyone who can reach the port
+can read your transcripts and change your settings. Keep it to networks you
+trust. `YT_BIND` is a LAN bind and nothing more — this app never uses Gradio's
+`share=True`, which would tunnel it to the public internet.
+
 ## Features
 
 - **Transcribe** — combines `youtube-transcript-api`, YouTube oEmbed (title/channel),
